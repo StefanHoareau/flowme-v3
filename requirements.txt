@@ -1,22 +1,21 @@
-# FlowMe v3 Production - Compatible Python 3.12 et Render
-# Configuration testée et stable
+# FlowMe v3 Production - Version sans aiohttp pour Python 3.13
+# Utilise httpx qui est compatible Python 3.13
 
-# Framework principal - versions compatibles
+# Framework principal
 fastapi==0.100.1
 uvicorn[standard]==0.23.2
 pydantic==1.10.12
 
-# HTTP clients
-aiohttp==3.8.5
+# HTTP client compatible Python 3.13
 httpx==0.24.1
 requests==2.31.0
 
 # Utilitaires FastAPI
 python-multipart==0.0.6
 
-# Traitement de texte (versions stables)
-textblob==0.17.1
-vaderSentiment==3.3.2
+# Traitement de texte (optionnel)
+# textblob==0.17.1
+# vaderSentiment==3.3.2
 
 # Utilitaires essentiels
 python-dateutil==2.8.2
