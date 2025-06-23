@@ -1,6 +1,6 @@
 """
-FlowMe v3 - Version Minimale Ultra-Stable pour Render
-Résout les problèmes Python 3.13 + Pydantic + FastAPI
+FlowMe v3 - Version compatible Python 3.13
+Utilise httpx au lieu de aiohttp
 """
 
 from fastapi import FastAPI, HTTPException
@@ -10,7 +10,7 @@ import os
 import logging
 import uuid
 from datetime import datetime
-import aiohttp
+import httpx
 import asyncio
 
 # Configuration logging
@@ -34,40 +34,47 @@ class ChatMessage(BaseModel):
     message: str
     session_id: str = None
 
-# États de conscience simplifiés
+# États de conscience
 STATES = {
-    1: {"name": "Présence", "advice": "Cultivez cette présence consciente"},
-    8: {"name": "Résonance", "advice": "Cette harmonie connecte profondément"},
-    16: {"name": "Amour", "advice": "Laissez cette énergie d'amour rayonner"},
-    22: {"name": "Compassion", "advice": "Votre empathie guérit et apaise"},
-    25: {"name": "Confusion", "advice": "Cette confusion est temporaire"},
-    32: {"name": "Carnage", "advice": "Recherchez de l'aide pour cette intensité"},
-    58: {"name": "Inclusion", "advice": "Vous intégrez les contradictions avec sagesse"}
+    1: {"name": "Présence", "advice": "Cultivez cette présence consciente, elle ancre dans l'instant."},
+    8: {"name": "Résonance", "advice": "Cette harmonie connecte profondément, laissez-la vous porter."},
+    16: {"name": "Amour", "advice": "Laissez cette énergie d'amour rayonner, elle transforme tout."},
+    22: {"name": "Compassion", "advice": "Votre empathie guérit et apaise, c'est un don précieux."},
+    25: {"name": "Confusion", "advice": "Cette confusion est temporaire, l'clarté émergera du chaos."},
+    32: {"name": "Carnage", "advice": "Recherchez de l'aide pour canaliser cette intensité destructrice."},
+    58: {"name": "Inclusion", "advice": "Vous intégrez les contradictions avec sagesse, c'est une force."}
 }
 
 def detect_state_simple(message: str) -> dict:
-    """Détection d'état simplifiée"""
+    """Détection d'état simplifiée mais efficace"""
     msg = message.lower()
     
-    if any(w in msg for w in ["présent", "ici", "maintenant", "attention"]):
+    # Détection par patterns
+    if any(w in msg for w in ["présent", "ici", "maintenant", "attention", "conscient"]):
         return {"state_id": 1, "state_name": "Présence"}
-    elif any(w in msg for w in ["harmonie", "résonance", "accord"]):
+    elif any(w in msg for w in ["harmonie", "résonance", "accord", "vibration", "connexion"]):
         return {"state_id": 8, "state_name": "Résonance"}
-    elif any(w in msg for w in ["amour", "aime", "affection"]):
+    elif any(w in msg for w in ["amour", "aime", "affection", "tendresse", "cœur"]):
         return {"state_id": 16, "state_name": "Amour"}
-    elif any(w in msg for w in ["compassion", "empathie", "comprends"]):
+    elif any(w in msg for w in ["compassion", "empathie", "comprends", "bienveillance"]):
         return {"state_id": 22, "state_name": "Compassion"}
-    elif any(w in msg for w in ["confus", "perdu", "trouble"]):
+    elif any(w in msg for w in ["confus", "perdu", "trouble", "mélange", "flou"]):
         return {"state_id": 25, "state_name": "Confusion"}
-    elif any(w in msg for w in ["violence", "rage", "colère", "tuer"]):
+    elif any(w in msg for w in ["violence", "rage", "colère", "tuer", "détruit", "carnage"]):
         return {"state_id": 32, "state_name": "Carnage"}
-    elif any(w in msg for w in ["contradiction", "paradoxe", "complexe"]):
+    elif any(w in msg for w in ["contradiction", "paradoxe", "complexe", "nuance", "intègre"]):
         return {"state_id": 58, "state_name": "Inclusion"}
     else:
-        return {"state_id": 1, "state_name": "Présence"}
+        # État par défaut basé sur le sentiment général
+        if any(w in msg for w in ["bien", "heureux", "joie", "content"]):
+            return {"state_id": 8, "state_name": "Résonance"}
+        elif any(w in msg for w in ["mal", "triste", "difficile", "dur"]):
+            return {"state_id": 25, "state_name": "Confusion"}
+        else:
+            return {"state_id": 1, "state_name": "Présence"}
 
 async def call_mistral(prompt: str, message: str) -> str:
-    """Appel Mistral AI"""
+    """Appel Mistral AI avec httpx"""
     if not MISTRAL_API_KEY:
         return None
     
@@ -84,28 +91,29 @@ async def call_mistral(prompt: str, message: str) -> str:
                 {"role": "user", "content": message}
             ],
             "temperature": 0.7,
-            "max_tokens": 200
+            "max_tokens": 250
         }
         
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
                 "https://api.mistral.ai/v1/chat/completions",
                 json=payload,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return data['choices'][0]['message']['content'].strip()
-                else:
-                    logger.error(f"Mistral error: {response.status}")
-                    return None
+                headers=headers
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                return data['choices'][0]['message']['content'].strip()
+            else:
+                logger.error(f"Mistral error: {response.status_code}")
+                return None
+                
     except Exception as e:
         logger.error(f"Mistral exception: {e}")
         return None
 
 async def save_to_nocodb(session_id: str, message: str, state: dict, response: str) -> bool:
-    """Sauvegarde NocoDB"""
+    """Sauvegarde NocoDB avec httpx"""
     if not (NOCODB_API_KEY and NOCODB_REACTIONS_TABLE_ID):
         return False
     
@@ -120,20 +128,28 @@ async def save_to_nocodb(session_id: str, message: str, state: dict, response: s
             "etat_nom": state["state_name"],
             "session_id": session_id,
             "timestamp": datetime.utcnow().isoformat(),
-            "pattern_detecte": "FlowMe v3 Stable",
-            "recommandations": response[:300] if response else ""
+            "pattern_detecte": "FlowMe v3 Stable httpx",
+            "recommandations": response[:400] if response else "",
+            "score_bien_etre": 7.0,  # Score par défaut
+            "evolution_tendance": "Interaction en cours"
         }
         
         url = f"{NOCODB_URL}/api/v1/db/data/v1/{NOCODB_REACTIONS_TABLE_ID}"
         
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
                 url,
                 json=record,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as response:
-                return response.status in [200, 201]
+                headers=headers
+            )
+            
+            if response.status_code in [200, 201]:
+                logger.info("Interaction sauvegardée dans NocoDB")
+                return True
+            else:
+                logger.error(f"NocoDB error: {response.status_code}")
+                return False
+                
     except Exception as e:
         logger.error(f"NocoDB error: {e}")
         return False
@@ -151,7 +167,7 @@ async def get_interface():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>FlowMe v3</title>
+        <title>FlowMe v3 - IA Empathique</title>
         <style>
             * {{ margin: 0; padding: 0; box-sizing: border-box; }}
             body {{
@@ -170,10 +186,21 @@ async def get_interface():
                 box-shadow: 0 20px 40px rgba(0,0,0,0.1);
                 width: 100%;
                 max-width: 500px;
+                backdrop-filter: blur(10px);
             }}
             .header {{ text-align: center; margin-bottom: 30px; }}
             .logo {{ font-size: 2.5rem; margin-bottom: 10px; }}
-            .title {{ font-size: 1.8rem; color: #4a5568; margin-bottom: 10px; }}
+            .title {{ 
+                font-size: 1.8rem; 
+                color: #4a5568; 
+                margin-bottom: 5px; 
+                font-weight: 600;
+            }}
+            .subtitle {{
+                color: #718096;
+                font-size: 0.9rem;
+                margin-bottom: 15px;
+            }}
             .status {{
                 display: inline-block;
                 padding: 6px 15px;
@@ -183,9 +210,22 @@ async def get_interface():
                 font-size: 0.9rem;
                 font-weight: 600;
             }}
+            .features {{
+                display: flex;
+                justify-content: center;
+                gap: 15px;
+                margin: 15px 0;
+                font-size: 0.75rem;
+                color: #718096;
+            }}
+            .feature {{
+                display: flex;
+                align-items: center;
+                gap: 3px;
+            }}
             .chat-container {{
                 margin-bottom: 20px;
-                max-height: 300px;
+                max-height: 350px;
                 overflow-y: auto;
                 padding: 15px;
                 background: #f7fafc;
@@ -215,7 +255,11 @@ async def get_interface():
                 margin-top: 5px;
                 font-style: italic;
             }}
-            .input-container {{ display: flex; gap: 10px; margin-bottom: 15px; }}
+            .input-container {{ 
+                display: flex; 
+                gap: 10px; 
+                margin-bottom: 15px; 
+            }}
             .message-input {{
                 flex: 1;
                 padding: 15px;
@@ -224,7 +268,10 @@ async def get_interface():
                 font-size: 1rem;
                 transition: border-color 0.3s;
             }}
-            .message-input:focus {{ outline: none; border-color: #667eea; }}
+            .message-input:focus {{ 
+                outline: none; 
+                border-color: #667eea; 
+            }}
             .send-button {{
                 padding: 15px 25px;
                 background: linear-gradient(45deg, #667eea, #764ba2);
@@ -236,9 +283,21 @@ async def get_interface():
                 transition: transform 0.2s;
             }}
             .send-button:hover {{ transform: translateY(-2px); }}
-            .send-button:disabled {{ opacity: 0.6; cursor: not-allowed; transform: none; }}
-            .session-info {{ text-align: center; font-size: 0.8rem; color: #718096; }}
-            .loading {{ text-align: center; color: #667eea; font-style: italic; }}
+            .send-button:disabled {{ 
+                opacity: 0.6; 
+                cursor: not-allowed; 
+                transform: none; 
+            }}
+            .session-info {{ 
+                text-align: center; 
+                font-size: 0.8rem; 
+                color: #718096; 
+            }}
+            .loading {{ 
+                text-align: center; 
+                color: #667eea; 
+                font-style: italic; 
+            }}
         </style>
     </head>
     <body>
@@ -246,13 +305,26 @@ async def get_interface():
             <div class="header">
                 <div class="logo">🌊</div>
                 <h1 class="title">FlowMe v3</h1>
+                <p class="subtitle">IA Empathique - États de Conscience Stefan Hoareau</p>
                 <span class="status">🚀 MODE {mode}</span>
+                
+                <div class="features">
+                    <div class="feature">
+                        <span>🧠</span> Mistral AI {'✅' if MISTRAL_API_KEY else '⚠️'}
+                    </div>
+                    <div class="feature">
+                        <span>💾</span> NocoDB {'✅' if NOCODB_API_KEY else '⚠️'}
+                    </div>
+                    <div class="feature">
+                        <span>🎯</span> États ✅
+                    </div>
+                </div>
             </div>
             
             <div class="chat-container" id="chat-container">
                 <div class="message ai-message">
-                    Bonjour ! Je suis FlowMe v3. Partagez ce que vous ressentez, 
-                    je détecte votre état de conscience et vous accompagne avec empathie. ✨
+                    Bonjour ! Je suis FlowMe v3 {'avec Mistral AI' if PRODUCTION_MODE else 'en mode local'}. 
+                    Partagez ce que vous ressentez, je détecte votre état de conscience et vous accompagne avec empathie. ✨
                     <div class="state-info">💫 Détection des états de conscience active</div>
                 </div>
             </div>
@@ -374,15 +446,28 @@ async def chat_endpoint(message: ChatMessage):
         
         # 1. Détection d'état
         detected_state = detect_state_simple(user_message)
-        state_advice = STATES.get(detected_state["state_id"], {}).get("advice", "Accueillez ce que vous vivez")
+        state_advice = STATES.get(detected_state["state_id"], {}).get("advice", "Accueillez ce que vous vivez avec bienveillance.")
         
-        logger.info(f"État détecté: {detected_state['state_id']} - {detected_state['state_name']}")
+        logger.info(f"[{session_id[:8]}] État détecté: {detected_state['state_id']} - {detected_state['state_name']}")
         
         # 2. Génération de réponse
         if MISTRAL_API_KEY:
-            prompt = f"""Tu es un coach empathique. L'utilisateur exprime l'état "{detected_state['state_name']}".
-Conseil: {state_advice}
-Réponds avec empathie en 2-3 phrases courtes, utilise "tu", sois bienveillant."""
+            prompt = f"""Tu es un coach empathique spécialisé dans les états de conscience selon Stefan Hoareau.
+
+L'utilisateur exprime actuellement l'état "{detected_state['state_name']}".
+
+Conseil contextualisé: {state_advice}
+
+DIRECTIVES:
+- Réponds avec empathie et bienveillance profonde
+- Évite tout jugement ou critique
+- Utilise un ton chaleureux et compréhensif
+- Propose des perspectives constructives
+- Maximum 2-3 phrases courtes mais profondes
+- Utilise "tu" pour créer la proximité
+- Reste dans l'esprit de l'état détecté
+
+Objectif: Accompagner l'utilisateur avec sagesse et compassion selon l'approche Stefan Hoareau."""
             
             ai_response = await call_mistral(prompt, user_message)
             if not ai_response:
@@ -390,7 +475,7 @@ Réponds avec empathie en 2-3 phrases courtes, utilise "tu", sois bienveillant."
         else:
             ai_response = state_advice
         
-        # 3. Sauvegarde
+        # 3. Sauvegarde NocoDB
         saved = await save_to_nocodb(session_id, user_message, detected_state, ai_response)
         
         return JSONResponse({
@@ -409,7 +494,7 @@ Réponds avec empathie en 2-3 phrases courtes, utilise "tu", sois bienveillant."
         logger.error(f"Chat error: {e}")
         return JSONResponse({
             "success": False,
-            "response": "Je rencontre une difficulté mais je reste à votre écoute.",
+            "response": "Je rencontre une difficulté technique mais je reste à votre écoute avec bienveillance.",
             "error": str(e)
         })
 
@@ -419,21 +504,36 @@ async def health_check():
     return {
         "status": "healthy",
         "mode": "production" if PRODUCTION_MODE else "degraded",
-        "version": "3.0.0-stable",
-        "python_version": "3.12.x",
+        "version": "3.0.0-httpx-stable",
         "services": {
             "mistral": {"configured": bool(MISTRAL_API_KEY)},
             "nocodb": {"configured": bool(NOCODB_API_KEY)},
-            "state_detection": {"available": True}
+            "state_detection": {"available": True, "method": "pattern_matching"}
+        },
+        "technical": {
+            "http_client": "httpx",
+            "python_compatible": "3.13+",
+            "framework": "FastAPI + Pydantic v1"
         }
+    }
+
+@app.get("/states")
+async def states_info():
+    """Information sur les états disponibles"""
+    return {
+        "available_states": len(STATES),
+        "states": {k: v["name"] for k, v in STATES.items()},
+        "detection_method": "Pattern matching + sentiment analysis",
+        "architecture": "Stefan Hoareau - États de Conscience"
     }
 
 @app.on_event("startup")
 async def startup_event():
-    logger.info("🚀 FlowMe v3 Stable - Démarrage")
+    logger.info("🚀 FlowMe v3 httpx-stable - Démarrage")
     logger.info(f"Mode: {'Production' if PRODUCTION_MODE else 'Dégradé'}")
     logger.info(f"Mistral: {'✅' if MISTRAL_API_KEY else '❌'}")
     logger.info(f"NocoDB: {'✅' if NOCODB_API_KEY else '❌'}")
+    logger.info("HTTP Client: httpx (compatible Python 3.13)")
 
 if __name__ == "__main__":
     import uvicorn
