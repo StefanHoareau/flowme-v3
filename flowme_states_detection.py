@@ -130,6 +130,78 @@ def get_state_description(state_id: int) -> str:
     return descriptions.get(state_id, f"État {state_id} - Description non disponible")
 
 
+def get_state_advice(state_id: int) -> str:
+    """
+    Retourne des conseils personnalisés pour un état FlowMe donné.
+    
+    Args:
+        state_id (int): Numéro de l'état (1-64)
+    
+    Returns:
+        str: Conseils adaptés à l'état
+    """
+    advice = {
+        1: "🌟 Cultivez cette ouverture ! Posez des questions, explorez de nouvelles perspectives.",
+        8: "🎵 Restez à l'écoute de cette harmonie. Prenez le temps de savourer cette connexion subtile.",
+        14: "⚡ Canalisez cette énergie constructivement. Votre colère peut devenir une force de changement positif.",
+        16: "💝 Laissez cette bienveillance rayonner. Partagez cette chaleur avec votre entourage.",
+        22: "✨ Célébrez cette joie ! Elle est contagieuse et peut illuminer la journée des autres.",
+        32: "🎭 Exprimez-vous librement et authentiquement. Vos mots forts ont leur place.",
+        40: "🤔 Prenez le temps de cette réflexion profonde. Vos insights peuvent être précieux.",
+        58: "🌈 Embrassez cette complexité ! Les contradictions font partie de la richesse humaine."
+    }
+    
+    return advice.get(state_id, f"🌊 État {state_id} - Restez présent à cette expérience unique.")
+
+
+def get_state_color(state_id: int) -> str:
+    """
+    Retourne la couleur associée à un état FlowMe.
+    
+    Args:
+        state_id (int): Numéro de l'état (1-64)
+    
+    Returns:
+        str: Code couleur hexadécimal
+    """
+    colors = {
+        1: "#FFD700",   # Or - Émerveillement
+        8: "#87CEEB",   # Bleu ciel - Résonance
+        14: "#FF6347",  # Rouge tomate - Colère constructive
+        16: "#FF69B4",  # Rose - Amour
+        22: "#FFA500",  # Orange - Joie
+        32: "#9370DB",  # Violet - Expression libre
+        40: "#708090",  # Gris ardoise - Réflexion
+        58: "#20B2AA"   # Turquoise - Inclusion
+    }
+    
+    return colors.get(state_id, "#4169E1")  # Bleu royal par défaut
+
+
+def get_state_icon(state_id: int) -> str:
+    """
+    Retourne l'icône associée à un état FlowMe.
+    
+    Args:
+        state_id (int): Numéro de l'état (1-64)
+    
+    Returns:
+        str: Émoji représentant l'état
+    """
+    icons = {
+        1: "🌟",   # Émerveillement
+        8: "🎵",   # Résonance
+        14: "⚡",  # Colère constructive
+        16: "💝",  # Amour
+        22: "✨",  # Joie
+        32: "🎭",  # Expression libre
+        40: "🤔",  # Réflexion
+        58: "🌈"   # Inclusion
+    }
+    
+    return icons.get(state_id, "🌊")  # Vague par défaut
+
+
 def analyze_message_context(message: str) -> Dict:
     """
     Analyse le contexte émotionnel d'un message.
