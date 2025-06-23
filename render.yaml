@@ -1,0 +1,39 @@
+# Configuration Render pour FlowMe v3
+services:
+  - type: web
+    name: flowme-v3
+    env: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: false
+      - key: LOG_LEVEL
+        value: INFO
+      - key: MISTRAL_API_KEY
+        sync: false  # À définir dans le dashboard Render
+      - key: NOCODB_URL
+        value: https://app.nocodb.com
+      - key: NOCODB_API_KEY
+        sync: false  # À définir dans le dashboard Render
+      - key: NOCODB_WORKSPACE
+        value: flowme
+      - key: NOCODB_REACTIONS_TABLE_ID
+        value: m8lwhj640ohzg7m
+      - key: NOCODB_STATES_TABLE
+        value: États
+      - key: MISTRAL_MODEL
+        value: mistral-large-latest
+      - key: MISTRAL_TEMPERATURE
+        value: "0.7"
+      - key: MISTRAL_TOP_P
+        value: "0.9"
+      - key: MISTRAL_MAX_TOKENS
+        value: "1000"
+      - key: SESSION_SECRET_KEY
+        generateValue: true
+      - key: SESSION_TIMEOUT
+        value: "3600"
