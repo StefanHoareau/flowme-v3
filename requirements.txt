@@ -1,31 +1,23 @@
-# FlowMe v3 Production - Dépendances compatibles Render
-# Version sans Rust pour éviter les erreurs de build
+# FlowMe v3 Production - Compatible Python 3.12 et Render
+# Configuration testée et stable
 
-# Framework principal
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
+# Framework principal - versions compatibles
+fastapi==0.100.1
+uvicorn[standard]==0.23.2
+pydantic==1.10.12
 
-# Pydantic v1 (sans Rust) - IMPORTANT
-pydantic==1.10.13
-
-# HTTP et networking
-aiohttp==3.9.1
-httpx==0.25.2
+# HTTP clients
+aiohttp==3.8.5
+httpx==0.24.1
 requests==2.31.0
 
 # Utilitaires FastAPI
 python-multipart==0.0.6
 
-# Traitement de texte pour détection d'états
+# Traitement de texte (versions stables)
 textblob==0.17.1
 vaderSentiment==3.3.2
 
-# NLTK léger (optionnel, peut être commenté si problème)
-# nltk==3.8.1
-
-# Utilitaires
+# Utilitaires essentiels
 python-dateutil==2.8.2
-pytz==2023.3
-
-# JSON et validation
-typing-extensions==4.8.0
+typing-extensions==4.7.1
