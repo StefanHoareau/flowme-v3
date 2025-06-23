@@ -1,24 +1,23 @@
 """
-FlowMe v3 - Version compatible Python 3.13
-Utilise httpx au lieu de aiohttp
+FlowMe v3 - Version Flask Ultra-Simple
+Compatible Python 3.13 - Pas de Pydantic !
 """
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel
+from flask import Flask, request, jsonify, render_template_string
 import os
 import logging
 import uuid
 from datetime import datetime
 import httpx
 import asyncio
+import json
 
 # Configuration logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Application FastAPI
-app = FastAPI(title="FlowMe v3", version="3.0.0")
+# Application Flask
+app = Flask(__name__)
 
 # Configuration des services
 MISTRAL_API_KEY = os.getenv('MISTRAL_API_KEY')
@@ -28,11 +27,6 @@ NOCODB_REACTIONS_TABLE_ID = os.getenv('NOCODB_REACTIONS_TABLE_ID')
 
 # Vérifications
 PRODUCTION_MODE = bool(MISTRAL_API_KEY and NOCODB_API_KEY)
-
-# Modèles Pydantic simples
-class ChatMessage(BaseModel):
-    message: str
-    session_id: str = None
 
 # États de conscience
 STATES = {
@@ -73,8 +67,8 @@ def detect_state_simple(message: str) -> dict:
         else:
             return {"state_id": 1, "state_name": "Présence"}
 
-async def call_mistral(prompt: str, message: str) -> str:
-    """Appel Mistral AI avec httpx"""
+async def call_mistral_async(prompt: str, message: str) -> str:
+    """Appel Mistral AI asynchrone"""
     if not MISTRAL_API_KEY:
         return None
     
@@ -112,8 +106,20 @@ async def call_mistral(prompt: str, message: str) -> str:
         logger.error(f"Mistral exception: {e}")
         return None
 
-async def save_to_nocodb(session_id: str, message: str, state: dict, response: str) -> bool:
-    """Sauvegarde NocoDB avec httpx"""
+def call_mistral(prompt: str, message: str) -> str:
+    """Wrapper synchrone pour Mistral"""
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(call_mistral_async(prompt, message))
+    except Exception as e:
+        logger.error(f"Mistral sync error: {e}")
+        return None
+    finally:
+        loop.close()
+
+async def save_to_nocodb_async(session_id: str, message: str, state: dict, response: str) -> bool:
+    """Sauvegarde NocoDB asynchrone"""
     if not (NOCODB_API_KEY and NOCODB_REACTIONS_TABLE_ID):
         return False
     
@@ -128,40 +134,48 @@ async def save_to_nocodb(session_id: str, message: str, state: dict, response: s
             "etat_nom": state["state_name"],
             "session_id": session_id,
             "timestamp": datetime.utcnow().isoformat(),
-            "pattern_detecte": "FlowMe v3 Stable httpx",
+            "pattern_detecte": "FlowMe v3 Flask",
             "recommandations": response[:400] if response else "",
-            "score_bien_etre": 7.0,  # Score par défaut
+            "score_bien_etre": 7.0,
             "evolution_tendance": "Interaction en cours"
         }
         
         url = f"{NOCODB_URL}/api/v1/db/data/v1/{NOCODB_REACTIONS_TABLE_ID}"
         
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                url,
-                json=record,
-                headers=headers
-            )
+            resp = await client.post(url, json=record, headers=headers)
             
-            if response.status_code in [200, 201]:
+            if resp.status_code in [200, 201]:
                 logger.info("Interaction sauvegardée dans NocoDB")
                 return True
             else:
-                logger.error(f"NocoDB error: {response.status_code}")
+                logger.error(f"NocoDB error: {resp.status_code}")
                 return False
                 
     except Exception as e:
         logger.error(f"NocoDB error: {e}")
         return False
 
-@app.get("/", response_class=HTMLResponse)
-async def get_interface():
+def save_to_nocodb(session_id: str, message: str, state: dict, response: str) -> bool:
+    """Wrapper synchrone pour NocoDB"""
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(save_to_nocodb_async(session_id, message, state, response))
+    except Exception as e:
+        logger.error(f"NocoDB sync error: {e}")
+        return False
+    finally:
+        loop.close()
+
+@app.route('/')
+def get_interface():
     """Interface principale"""
     
     mode = "PRODUCTION" if PRODUCTION_MODE else "DÉGRADÉ"
     color = "#48bb78" if PRODUCTION_MODE else "#ed8936"
     
-    return HTMLResponse(f"""
+    html_template = f"""
     <!DOCTYPE html>
     <html lang="fr">
     <head>
@@ -318,6 +332,9 @@ async def get_interface():
                     <div class="feature">
                         <span>🎯</span> États ✅
                     </div>
+                    <div class="feature">
+                        <span>⚡</span> Flask ✅
+                    </div>
                 </div>
             </div>
             
@@ -325,7 +342,7 @@ async def get_interface():
                 <div class="message ai-message">
                     Bonjour ! Je suis FlowMe v3 {'avec Mistral AI' if PRODUCTION_MODE else 'en mode local'}. 
                     Partagez ce que vous ressentez, je détecte votre état de conscience et vous accompagne avec empathie. ✨
-                    <div class="state-info">💫 Détection des états de conscience active</div>
+                    <div class="state-info">💫 Détection des états de conscience active (Flask)</div>
                 </div>
             </div>
             
@@ -432,17 +449,23 @@ async def get_interface():
         </script>
     </body>
     </html>
-    """)
+    """
+    
+    return html_template
 
-@app.post("/chat")
-async def chat_endpoint(message: ChatMessage):
+@app.route('/chat', methods=['POST'])
+def chat_endpoint():
     """Endpoint de chat principal"""
     try:
-        session_id = message.session_id or str(uuid.uuid4())
-        user_message = message.message.strip()
+        data = request.get_json()
         
-        if not user_message:
-            raise HTTPException(status_code=400, detail="Message vide")
+        if not data or not data.get('message'):
+            return jsonify({"success": False, "error": "Message requis"}), 400
+        
+        session_id = data.get('session_id') or str(uuid.uuid4())
+        user_message = data['message'].strip()
+        
+        logger.info(f"[{session_id[:8]}] Message: {user_message[:50]}...")
         
         # 1. Détection d'état
         detected_state = detect_state_simple(user_message)
@@ -462,23 +485,21 @@ DIRECTIVES:
 - Réponds avec empathie et bienveillance profonde
 - Évite tout jugement ou critique
 - Utilise un ton chaleureux et compréhensif
-- Propose des perspectives constructives
 - Maximum 2-3 phrases courtes mais profondes
 - Utilise "tu" pour créer la proximité
-- Reste dans l'esprit de l'état détecté
 
-Objectif: Accompagner l'utilisateur avec sagesse et compassion selon l'approche Stefan Hoareau."""
+Objectif: Accompagner l'utilisateur avec sagesse et compassion."""
             
-            ai_response = await call_mistral(prompt, user_message)
+            ai_response = call_mistral(prompt, user_message)
             if not ai_response:
                 ai_response = state_advice
         else:
             ai_response = state_advice
         
         # 3. Sauvegarde NocoDB
-        saved = await save_to_nocodb(session_id, user_message, detected_state, ai_response)
+        saved = save_to_nocodb(session_id, user_message, detected_state, ai_response)
         
-        return JSONResponse({
+        return jsonify({
             "success": True,
             "response": ai_response,
             "detected_state": detected_state,
@@ -492,49 +513,47 @@ Objectif: Accompagner l'utilisateur avec sagesse et compassion selon l'approche 
         
     except Exception as e:
         logger.error(f"Chat error: {e}")
-        return JSONResponse({
+        return jsonify({
             "success": False,
             "response": "Je rencontre une difficulté technique mais je reste à votre écoute avec bienveillance.",
             "error": str(e)
         })
 
-@app.get("/health")
-async def health_check():
+@app.route('/health')
+def health_check():
     """Status de santé"""
-    return {
+    return jsonify({
         "status": "healthy",
         "mode": "production" if PRODUCTION_MODE else "degraded",
-        "version": "3.0.0-httpx-stable",
+        "version": "3.0.0-flask-stable",
         "services": {
             "mistral": {"configured": bool(MISTRAL_API_KEY)},
             "nocodb": {"configured": bool(NOCODB_API_KEY)},
             "state_detection": {"available": True, "method": "pattern_matching"}
         },
         "technical": {
-            "http_client": "httpx",
+            "framework": "Flask",
             "python_compatible": "3.13+",
-            "framework": "FastAPI + Pydantic v1"
+            "no_pydantic": True
         }
-    }
+    })
 
-@app.get("/states")
-async def states_info():
+@app.route('/states')
+def states_info():
     """Information sur les états disponibles"""
-    return {
+    return jsonify({
         "available_states": len(STATES),
         "states": {k: v["name"] for k, v in STATES.items()},
         "detection_method": "Pattern matching + sentiment analysis",
         "architecture": "Stefan Hoareau - États de Conscience"
-    }
+    })
 
-@app.on_event("startup")
-async def startup_event():
-    logger.info("🚀 FlowMe v3 httpx-stable - Démarrage")
+if __name__ == "__main__":
+    logger.info("🚀 FlowMe v3 Flask - Démarrage")
     logger.info(f"Mode: {'Production' if PRODUCTION_MODE else 'Dégradé'}")
     logger.info(f"Mistral: {'✅' if MISTRAL_API_KEY else '❌'}")
     logger.info(f"NocoDB: {'✅' if NOCODB_API_KEY else '❌'}")
-    logger.info("HTTP Client: httpx (compatible Python 3.13)")
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+    logger.info("Framework: Flask (compatible Python 3.13)")
+    
+    port = int(os.getenv("PORT", 8000))
+    app.run(host="0.0.0.0", port=port, debug=False)
