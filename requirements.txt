@@ -1,22 +1,13 @@
-# FlowMe v3 Production - Version sans aiohttp pour Python 3.13
-# Utilise httpx qui est compatible Python 3.13
+# FlowMe v3 - Version Flask Ultra-Simple (compatible Python 3.13)
+# Pas de Pydantic, pas de ForwardRef, juste Flask
 
-# Framework principal
-fastapi==0.100.1
-uvicorn[standard]==0.23.2
-pydantic==1.10.12
+# Framework web léger
+flask==3.0.0
+gunicorn==21.2.0
 
-# HTTP client compatible Python 3.13
+# HTTP client moderne
 httpx==0.24.1
 requests==2.31.0
 
-# Utilitaires FastAPI
-python-multipart==0.0.6
-
-# Traitement de texte (optionnel)
-# textblob==0.17.1
-# vaderSentiment==3.3.2
-
-# Utilitaires essentiels
+# JSON et utilitaires
 python-dateutil==2.8.2
-typing-extensions==4.7.1
