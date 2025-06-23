@@ -1,0 +1,31 @@
+# FlowMe v3 - Requirements Production
+# ====================================
+
+# Framework Web
+fastapi==0.115.13
+uvicorn[standard]==0.34.3
+
+# HTTP Client pour APIs externes
+httpx==0.28.1
+
+# Validation et sérialisation
+pydantic==2.11.7
+
+# Variables d'environnement
+python-dotenv==1.1.0
+
+# Templates (si nécessaire)
+jinja2==3.1.6
+
+# Utilitaires
+typing-extensions==4.14.0
+typing-inspection==0.4.1
+
+# Production et monitoring
+gunicorn==23.0.0
+
+# Sécurité
+cryptography==44.0.0
+
+# Logging avancé (optionnel)
+structlog==24.5.0
