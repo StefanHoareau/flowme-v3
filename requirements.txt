@@ -1,20 +1,12 @@
-# requirements.txt - FlowMe v3 - Versions stables
+# requirements.txt - FlowMe v3 - Solution temporaire
 
-# Framework web
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
+# Framework web (versions stables)
+fastapi
+uvicorn
+pydantic
+requests
+jinja2
+python-dotenv
 
-# Client HTTP (remplace aiohttp pour compatibilité Python 3.13)
-httpx==0.25.2
-
-# Validation de données
-pydantic==2.5.0
-
-# Support CORS et formulaires
-python-multipart==0.0.6
-
-# Variables d'environnement
-python-dotenv==1.0.0
-
-# Utilitaires de base (optionnel)
-jinja2==3.1.6
+# Client HTTP compatible (remplace aiohttp)
+httpx
