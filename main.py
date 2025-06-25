@@ -1,35 +1,81 @@
 """
-FlowMe v3 - Version Flask Ultra-Simple
-Compatible Python 3.13 - Pas de Pydantic !
+FlowMe v3 - API Production Finale
+IA Empathique avec Mistral AI + NocoDB
+Version corrigée sans suggest_transition
 """
 
-from flask import Flask, request, jsonify, render_template_string
-import os
-import logging
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel
 import uuid
+import logging
 from datetime import datetime
+from typing import Optional, Dict, Any, List
+import os
 import httpx
 import asyncio
-import json
 
 # Configuration logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Application Flask
-app = Flask(__name__)
+# Import des fonctions de détection (CORRIGÉ)
+try:
+    from flowme_states_detection import (
+        detect_consciousness_state,
+        get_state_advice
+        # Supprimé suggest_transition qui n'existe pas
+    )
+    STATES_DETECTION_AVAILABLE = True
+    logger.info("✅ Module flowme_states_detection importé avec succès")
+except ImportError as e:
+    logger.error(f"❌ Erreur import flowme_states_detection: {e}")
+    STATES_DETECTION_AVAILABLE = False
+    
+    # Fonctions de fallback
+    def detect_consciousness_state(message: str) -> Dict[str, Any]:
+        return {"state_id": 1, "state_name": "Présence", "confidence": 0.5}
+    
+    def get_state_advice(state_id: int) -> str:
+        return "Accueillez ce que vous vivez avec bienveillance."
+
+except Exception as e:
+    logger.error(f"❌ Erreur générale lors de l'import: {e}")
+    raise e  # Arrêter l'application si le module ne fonctionne pas
+
+# Configuration FastAPI
+app = FastAPI(
+    title="FlowMe v3 - Production",
+    description="IA Empathique avec Mistral AI + NocoDB - États de Conscience Stefan Hoareau",
+    version="3.0.0-final"
+)
 
 # Configuration des services
 MISTRAL_API_KEY = os.getenv('MISTRAL_API_KEY')
-NOCODB_API_KEY = os.getenv('NOCODB_API_KEY')
 NOCODB_URL = os.getenv('NOCODB_URL', 'https://app.nocodb.com')
+NOCODB_API_KEY = os.getenv('NOCODB_API_KEY')
 NOCODB_REACTIONS_TABLE_ID = os.getenv('NOCODB_REACTIONS_TABLE_ID')
 
-# Vérifications
-PRODUCTION_MODE = bool(MISTRAL_API_KEY and NOCODB_API_KEY)
+# Vérification de la configuration
+MISTRAL_CONFIGURED = bool(MISTRAL_API_KEY)
+NOCODB_CONFIGURED = bool(NOCODB_API_KEY and NOCODB_REACTIONS_TABLE_ID)
+PRODUCTION_MODE = MISTRAL_CONFIGURED and NOCODB_CONFIGURED
 
-# États de conscience
-STATES = {
+# Modèles Pydantic
+class ChatMessage(BaseModel):
+    message: str
+    session_id: Optional[str] = None
+
+class FeedbackMessage(BaseModel):
+    session_id: str
+    record_id: str
+    feedback: str
+
+# Cache de session
+session_contexts = {}
+
+# États de conscience de base pour fallback
+BASIC_STATES = {
     1: {"name": "Présence", "advice": "Cultivez cette présence consciente, elle ancre dans l'instant."},
     8: {"name": "Résonance", "advice": "Cette harmonie connecte profondément, laissez-la vous porter."},
     16: {"name": "Amour", "advice": "Laissez cette énergie d'amour rayonner, elle transforme tout."},
@@ -39,37 +85,11 @@ STATES = {
     58: {"name": "Inclusion", "advice": "Vous intégrez les contradictions avec sagesse, c'est une force."}
 }
 
-def detect_state_simple(message: str) -> dict:
-    """Détection d'état simplifiée mais efficace"""
-    msg = message.lower()
-    
-    # Détection par patterns
-    if any(w in msg for w in ["présent", "ici", "maintenant", "attention", "conscient"]):
-        return {"state_id": 1, "state_name": "Présence"}
-    elif any(w in msg for w in ["harmonie", "résonance", "accord", "vibration", "connexion"]):
-        return {"state_id": 8, "state_name": "Résonance"}
-    elif any(w in msg for w in ["amour", "aime", "affection", "tendresse", "cœur"]):
-        return {"state_id": 16, "state_name": "Amour"}
-    elif any(w in msg for w in ["compassion", "empathie", "comprends", "bienveillance"]):
-        return {"state_id": 22, "state_name": "Compassion"}
-    elif any(w in msg for w in ["confus", "perdu", "trouble", "mélange", "flou"]):
-        return {"state_id": 25, "state_name": "Confusion"}
-    elif any(w in msg for w in ["violence", "rage", "colère", "tuer", "détruit", "carnage"]):
-        return {"state_id": 32, "state_name": "Carnage"}
-    elif any(w in msg for w in ["contradiction", "paradoxe", "complexe", "nuance", "intègre"]):
-        return {"state_id": 58, "state_name": "Inclusion"}
-    else:
-        # État par défaut basé sur le sentiment général
-        if any(w in msg for w in ["bien", "heureux", "joie", "content"]):
-            return {"state_id": 8, "state_name": "Résonance"}
-        elif any(w in msg for w in ["mal", "triste", "difficile", "dur"]):
-            return {"state_id": 25, "state_name": "Confusion"}
-        else:
-            return {"state_id": 1, "state_name": "Présence"}
-
-async def call_mistral_async(prompt: str, message: str) -> str:
-    """Appel Mistral AI asynchrone"""
-    if not MISTRAL_API_KEY:
+async def call_mistral_api(prompt: str, user_message: str) -> str:
+    """
+    Appel à l'API Mistral AI
+    """
+    if not MISTRAL_CONFIGURED:
         return None
     
     try:
@@ -82,10 +102,10 @@ async def call_mistral_async(prompt: str, message: str) -> str:
             "model": "mistral-small-latest",
             "messages": [
                 {"role": "system", "content": prompt},
-                {"role": "user", "content": message}
+                {"role": "user", "content": user_message}
             ],
             "temperature": 0.7,
-            "max_tokens": 250
+            "max_tokens": 300
         }
         
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -99,28 +119,18 @@ async def call_mistral_async(prompt: str, message: str) -> str:
                 data = response.json()
                 return data['choices'][0]['message']['content'].strip()
             else:
-                logger.error(f"Mistral error: {response.status_code}")
+                logger.error(f"Erreur API Mistral: {response.status_code}")
                 return None
                 
     except Exception as e:
-        logger.error(f"Mistral exception: {e}")
+        logger.error(f"Erreur appel Mistral: {e}")
         return None
 
-def call_mistral(prompt: str, message: str) -> str:
-    """Wrapper synchrone pour Mistral"""
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        return loop.run_until_complete(call_mistral_async(prompt, message))
-    except Exception as e:
-        logger.error(f"Mistral sync error: {e}")
-        return None
-    finally:
-        loop.close()
-
-async def save_to_nocodb_async(session_id: str, message: str, state: dict, response: str) -> bool:
-    """Sauvegarde NocoDB asynchrone"""
-    if not (NOCODB_API_KEY and NOCODB_REACTIONS_TABLE_ID):
+async def save_to_nocodb(session_id: str, user_message: str, detected_state: Dict, ai_response: str) -> bool:
+    """
+    Sauvegarde dans NocoDB
+    """
+    if not NOCODB_CONFIGURED:
         return False
     
     try:
@@ -130,52 +140,40 @@ async def save_to_nocodb_async(session_id: str, message: str, state: dict, respo
         }
         
         record = {
-            "etat_id_flowme": str(state["state_id"]),
-            "etat_nom": state["state_name"],
+            "etat_id_flowme": str(detected_state.get('state_id', '')),
+            "etat_nom": detected_state.get('state_name', ''),
             "session_id": session_id,
             "timestamp": datetime.utcnow().isoformat(),
-            "pattern_detecte": "FlowMe v3 Flask",
-            "recommandations": response[:400] if response else "",
-            "score_bien_etre": 7.0,
+            "pattern_detecte": "FlowMe v3 Final",
+            "score_bien_etre": detected_state.get('well_being_score', 7.0),
+            "recommandations": ai_response[:400] if ai_response else '',
             "evolution_tendance": "Interaction en cours"
         }
         
         url = f"{NOCODB_URL}/api/v1/db/data/v1/{NOCODB_REACTIONS_TABLE_ID}"
         
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(url, json=record, headers=headers)
+            response = await client.post(url, json=record, headers=headers)
             
-            if resp.status_code in [200, 201]:
+            if response.status_code in [200, 201]:
                 logger.info("Interaction sauvegardée dans NocoDB")
                 return True
             else:
-                logger.error(f"NocoDB error: {resp.status_code}")
+                logger.error(f"Erreur NocoDB: {response.status_code}")
                 return False
                 
     except Exception as e:
-        logger.error(f"NocoDB error: {e}")
+        logger.error(f"Erreur sauvegarde NocoDB: {e}")
         return False
 
-def save_to_nocodb(session_id: str, message: str, state: dict, response: str) -> bool:
-    """Wrapper synchrone pour NocoDB"""
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        return loop.run_until_complete(save_to_nocodb_async(session_id, message, state, response))
-    except Exception as e:
-        logger.error(f"NocoDB sync error: {e}")
-        return False
-    finally:
-        loop.close()
-
-@app.route('/')
-def get_interface():
-    """Interface principale"""
+@app.get("/", response_class=HTMLResponse)
+async def get_interface():
+    """Interface utilisateur moderne - Version finale"""
     
     mode = "PRODUCTION" if PRODUCTION_MODE else "DÉGRADÉ"
-    color = "#48bb78" if PRODUCTION_MODE else "#ed8936"
+    mode_color = "#48bb78" if PRODUCTION_MODE else "#ed8936"
     
-    html_template = f"""
+    html_content = f"""
     <!DOCTYPE html>
     <html lang="fr">
     <head>
@@ -184,8 +182,9 @@ def get_interface():
         <title>FlowMe v3 - IA Empathique</title>
         <style>
             * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+            
             body {{
-                font-family: 'Segoe UI', sans-serif;
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                 min-height: 100vh;
                 display: flex;
@@ -193,6 +192,7 @@ def get_interface():
                 justify-content: center;
                 padding: 20px;
             }}
+            
             .container {{
                 background: rgba(255, 255, 255, 0.95);
                 border-radius: 20px;
@@ -202,28 +202,40 @@ def get_interface():
                 max-width: 500px;
                 backdrop-filter: blur(10px);
             }}
-            .header {{ text-align: center; margin-bottom: 30px; }}
-            .logo {{ font-size: 2.5rem; margin-bottom: 10px; }}
-            .title {{ 
-                font-size: 1.8rem; 
-                color: #4a5568; 
-                margin-bottom: 5px; 
+            
+            .header {{
+                text-align: center;
+                margin-bottom: 30px;
+            }}
+            
+            .logo {{
+                font-size: 2.5rem;
+                margin-bottom: 10px;
+            }}
+            
+            .title {{
+                font-size: 1.8rem;
+                color: #4a5568;
+                margin-bottom: 5px;
                 font-weight: 600;
             }}
+            
             .subtitle {{
                 color: #718096;
                 font-size: 0.9rem;
                 margin-bottom: 15px;
             }}
+            
             .status {{
                 display: inline-block;
                 padding: 6px 15px;
-                background: {color};
+                background: {mode_color};
                 color: white;
                 border-radius: 20px;
                 font-size: 0.9rem;
                 font-weight: 600;
             }}
+            
             .features {{
                 display: flex;
                 justify-content: center;
@@ -232,11 +244,13 @@ def get_interface():
                 font-size: 0.75rem;
                 color: #718096;
             }}
+            
             .feature {{
                 display: flex;
                 align-items: center;
                 gap: 3px;
             }}
+            
             .chat-container {{
                 margin-bottom: 20px;
                 max-height: 350px;
@@ -246,34 +260,40 @@ def get_interface():
                 border-radius: 10px;
                 border: 1px solid #e2e8f0;
             }}
+            
             .message {{
                 margin-bottom: 15px;
                 padding: 12px;
                 border-radius: 10px;
                 line-height: 1.5;
             }}
+            
             .user-message {{
                 background: linear-gradient(45deg, #667eea, #764ba2);
                 color: white;
                 margin-left: 20px;
             }}
+            
             .ai-message {{
                 background: #e6fffa;
                 color: #234e52;
                 margin-right: 20px;
                 border-left: 4px solid #38b2ac;
             }}
+            
             .state-info {{
                 font-size: 0.8rem;
                 color: #4a5568;
                 margin-top: 5px;
                 font-style: italic;
             }}
-            .input-container {{ 
-                display: flex; 
-                gap: 10px; 
-                margin-bottom: 15px; 
+            
+            .input-container {{
+                display: flex;
+                gap: 10px;
+                margin-bottom: 15px;
             }}
+            
             .message-input {{
                 flex: 1;
                 padding: 15px;
@@ -282,10 +302,12 @@ def get_interface():
                 font-size: 1rem;
                 transition: border-color 0.3s;
             }}
-            .message-input:focus {{ 
-                outline: none; 
-                border-color: #667eea; 
+            
+            .message-input:focus {{
+                outline: none;
+                border-color: #667eea;
             }}
+            
             .send-button {{
                 padding: 15px 25px;
                 background: linear-gradient(45deg, #667eea, #764ba2);
@@ -296,21 +318,28 @@ def get_interface():
                 font-weight: 600;
                 transition: transform 0.2s;
             }}
-            .send-button:hover {{ transform: translateY(-2px); }}
-            .send-button:disabled {{ 
-                opacity: 0.6; 
-                cursor: not-allowed; 
-                transform: none; 
+            
+            .send-button:hover {{
+                transform: translateY(-2px);
             }}
-            .session-info {{ 
-                text-align: center; 
-                font-size: 0.8rem; 
-                color: #718096; 
+            
+            .send-button:disabled {{
+                opacity: 0.6;
+                cursor: not-allowed;
+                transform: none;
             }}
-            .loading {{ 
-                text-align: center; 
-                color: #667eea; 
-                font-style: italic; 
+            
+            .session-info {{
+                text-align: center;
+                font-size: 0.8rem;
+                color: #718096;
+                margin-top: 10px;
+            }}
+            
+            .loading {{
+                text-align: center;
+                color: #667eea;
+                font-style: italic;
             }}
         </style>
     </head>
@@ -324,25 +353,22 @@ def get_interface():
                 
                 <div class="features">
                     <div class="feature">
-                        <span>🧠</span> Mistral AI {'✅' if MISTRAL_API_KEY else '⚠️'}
+                        <span>🧠</span> Mistral AI {'✅' if MISTRAL_CONFIGURED else '⚠️'}
                     </div>
                     <div class="feature">
-                        <span>💾</span> NocoDB {'✅' if NOCODB_API_KEY else '⚠️'}
+                        <span>💾</span> NocoDB {'✅' if NOCODB_CONFIGURED else '⚠️'}
                     </div>
                     <div class="feature">
-                        <span>🎯</span> États ✅
-                    </div>
-                    <div class="feature">
-                        <span>⚡</span> Flask ✅
+                        <span>🎯</span> États {'✅' if STATES_DETECTION_AVAILABLE else '⚠️'}
                     </div>
                 </div>
             </div>
             
             <div class="chat-container" id="chat-container">
                 <div class="message ai-message">
-                    Bonjour ! Je suis FlowMe v3 {'avec Mistral AI' if PRODUCTION_MODE else 'en mode local'}. 
+                    Bonjour ! Je suis FlowMe v3 {'avec Mistral AI' if PRODUCTION_MODE else 'en mode dégradé'}. 
                     Partagez ce que vous ressentez, je détecte votre état de conscience et vous accompagne avec empathie. ✨
-                    <div class="state-info">💫 Détection des états de conscience active (Flask)</div>
+                    <div class="state-info">💫 Détection des états de conscience {'active' if STATES_DETECTION_AVAILABLE else 'basique'}</div>
                 </div>
             </div>
             
@@ -434,7 +460,7 @@ def get_interface():
                 }} catch (error) {{
                     removeLoading();
                     addMessage('❌ Erreur de connexion. Veuillez réessayer.', false);
-                    console.error(error);
+                    console.error('Erreur:', error);
                 }} finally {{
                     sendButton.disabled = false;
                     messageInput.focus();
@@ -450,110 +476,171 @@ def get_interface():
     </body>
     </html>
     """
-    
-    return html_template
+    return HTMLResponse(content=html_content)
 
-@app.route('/chat', methods=['POST'])
-def chat_endpoint():
-    """Endpoint de chat principal"""
+@app.post("/chat")
+async def chat_endpoint(message: ChatMessage):
+    """
+    Endpoint principal de chat - Version finale
+    """
     try:
-        data = request.get_json()
+        session_id = message.session_id or str(uuid.uuid4())
+        user_message = message.message.strip()
         
-        if not data or not data.get('message'):
-            return jsonify({"success": False, "error": "Message requis"}), 400
+        if not user_message:
+            raise HTTPException(status_code=400, detail="Message vide")
         
-        session_id = data.get('session_id') or str(uuid.uuid4())
-        user_message = data['message'].strip()
+        logger.info(f"[{session_id[:8]}] Message reçu: {user_message[:50]}...")
         
-        logger.info(f"[{session_id[:8]}] Message: {user_message[:50]}...")
+        # 1. Détection de l'état de conscience
+        detected_state = detect_consciousness_state(user_message)
+        state_advice = get_state_advice(detected_state['state_id'])
         
-        # 1. Détection d'état
-        detected_state = detect_state_simple(user_message)
-        state_advice = STATES.get(detected_state["state_id"], {}).get("advice", "Accueillez ce que vous vivez avec bienveillance.")
+        # Enrichissement des données d'état
+        detected_state.update({
+            'advice': state_advice,
+            'source': 'mistral' if MISTRAL_CONFIGURED else 'local'
+        })
         
         logger.info(f"[{session_id[:8]}] État détecté: {detected_state['state_id']} - {detected_state['state_name']}")
         
-        # 2. Génération de réponse
-        if MISTRAL_API_KEY:
-            prompt = f"""Tu es un coach empathique spécialisé dans les états de conscience selon Stefan Hoareau.
+        # 2. Génération de la réponse
+        if MISTRAL_CONFIGURED:
+            # Construction du prompt pour Mistral
+            system_prompt = f"""Tu es un coach empathique spécialisé dans les 64 états de conscience selon Stefan Hoareau.
 
-L'utilisateur exprime actuellement l'état "{detected_state['state_name']}".
+L'utilisateur exprime actuellement l'État {detected_state['state_id']}: {detected_state['state_name']}.
 
-Conseil contextualisé: {state_advice}
+Conseil adapté: {state_advice}
 
-DIRECTIVES:
+DIRECTIVES IMPORTANTES:
 - Réponds avec empathie et bienveillance profonde
 - Évite tout jugement ou critique
 - Utilise un ton chaleureux et compréhensif
+- Propose des perspectives constructives
+- Reste dans l'état émotionnel détecté
 - Maximum 2-3 phrases courtes mais profondes
 - Utilise "tu" pour créer la proximité
 
-Objectif: Accompagner l'utilisateur avec sagesse et compassion."""
+Objectif: Accompagner l'utilisateur avec sagesse et compassion selon l'approche Stefan Hoareau."""
+
+            ai_response = await call_mistral_api(system_prompt, user_message)
             
-            ai_response = call_mistral(prompt, user_message)
             if not ai_response:
                 ai_response = state_advice
+                
         else:
+            # Mode dégradé
             ai_response = state_advice
         
         # 3. Sauvegarde NocoDB
-        saved = save_to_nocodb(session_id, user_message, detected_state, ai_response)
+        save_success = await save_to_nocodb(session_id, user_message, detected_state, ai_response)
         
-        return jsonify({
+        # 4. Cache local
+        if session_id not in session_contexts:
+            session_contexts[session_id] = []
+        
+        session_contexts[session_id].append({
+            'timestamp': datetime.utcnow().isoformat(),
+            'user_message': user_message,
+            'detected_state': detected_state,
+            'ai_response': ai_response
+        })
+        
+        if len(session_contexts[session_id]) > 10:
+            session_contexts[session_id] = session_contexts[session_id][-10:]
+        
+        # 5. Réponse finale
+        return JSONResponse({
             "success": True,
             "response": ai_response,
-            "detected_state": detected_state,
+            "detected_state": {
+                "state_id": detected_state['state_id'],
+                "state_name": detected_state['state_name'],
+                "confidence": detected_state.get('confidence', 0.7),
+                "advice": state_advice
+            },
             "session_id": session_id,
             "timestamp": datetime.utcnow().isoformat(),
-            "services": {
-                "mistral": bool(MISTRAL_API_KEY),
-                "nocodb_saved": saved
+            "services_status": {
+                "mistral_available": MISTRAL_CONFIGURED,
+                "nocodb_saved": save_success,
+                "states_detection": STATES_DETECTION_AVAILABLE
             }
         })
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Chat error: {e}")
-        return jsonify({
+        logger.error(f"Erreur chat endpoint: {e}")
+        
+        # Réponse de secours
+        fallback_response = BASIC_STATES.get(1, {}).get("advice", "Je vous entends et je respecte ce que vous traversez.")
+        
+        return JSONResponse({
             "success": False,
-            "response": "Je rencontre une difficulté technique mais je reste à votre écoute avec bienveillance.",
-            "error": str(e)
+            "response": fallback_response,
+            "detected_state": {
+                "state_id": 1,
+                "state_name": "Présence",
+                "confidence": 0.5,
+                "advice": "Mode de secours activé"
+            },
+            "session_id": session_id,
+            "error": "Mode de secours - fonctionnalités limitées",
+            "services_status": {
+                "mistral_available": False,
+                "nocodb_saved": False,
+                "states_detection": False
+            }
         })
 
-@app.route('/health')
-def health_check():
-    """Status de santé"""
-    return jsonify({
+@app.get("/health")
+async def health_check():
+    """
+    Endpoint de santé - Version finale
+    """
+    return {
         "status": "healthy",
         "mode": "production" if PRODUCTION_MODE else "degraded",
-        "version": "3.0.0-flask-stable",
+        "timestamp": datetime.utcnow().isoformat(),
+        "version": "3.0.0-final",
         "services": {
-            "mistral": {"configured": bool(MISTRAL_API_KEY)},
-            "nocodb": {"configured": bool(NOCODB_API_KEY)},
-            "state_detection": {"available": True, "method": "pattern_matching"}
+            "mistral": {"configured": MISTRAL_CONFIGURED},
+            "nocodb": {"configured": NOCODB_CONFIGURED},
+            "state_detection": {"available": STATES_DETECTION_AVAILABLE}
         },
-        "technical": {
-            "framework": "Flask",
-            "python_compatible": "3.13+",
-            "no_pydantic": True
+        "features": {
+            "ai_responses": MISTRAL_CONFIGURED,
+            "conversation_persistence": NOCODB_CONFIGURED,
+            "state_detection": STATES_DETECTION_AVAILABLE,
+            "fallback_responses": True
         }
-    })
+    }
 
-@app.route('/states')
-def states_info():
-    """Information sur les états disponibles"""
-    return jsonify({
-        "available_states": len(STATES),
-        "states": {k: v["name"] for k, v in STATES.items()},
-        "detection_method": "Pattern matching + sentiment analysis",
-        "architecture": "Stefan Hoareau - États de Conscience"
-    })
+@app.get("/states")
+async def states_info():
+    """
+    Information sur les états de conscience
+    """
+    return {
+        "total_states_available": len(BASIC_STATES),
+        "detection_engine": "stefan_hoareau" if STATES_DETECTION_AVAILABLE else "basic_fallback",
+        "states_sample": {k: v["name"] for k, v in BASIC_STATES.items()},
+        "architecture": "Stefan Hoareau - États de Conscience",
+        "version": "3.0.0-final"
+    }
+
+# Événements de démarrage
+@app.on_event("startup")
+async def startup_event():
+    logger.info("🚀 FlowMe v3 Final - Démarrage")
+    logger.info(f"Mode: {'Production' if PRODUCTION_MODE else 'Dégradé'}")
+    logger.info(f"Mistral: {'✅' if MISTRAL_CONFIGURED else '❌'}")
+    logger.info(f"NocoDB: {'✅' if NOCODB_CONFIGURED else '❌'}")
+    logger.info(f"États: {'✅' if STATES_DETECTION_AVAILABLE else '⚠️ Basique'}")
 
 if __name__ == "__main__":
-    logger.info("🚀 FlowMe v3 Flask - Démarrage")
-    logger.info(f"Mode: {'Production' if PRODUCTION_MODE else 'Dégradé'}")
-    logger.info(f"Mistral: {'✅' if MISTRAL_API_KEY else '❌'}")
-    logger.info(f"NocoDB: {'✅' if NOCODB_API_KEY else '❌'}")
-    logger.info("Framework: Flask (compatible Python 3.13)")
-    
+    import uvicorn
     port = int(os.getenv("PORT", 8000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    uvicorn.run(app, host="0.0.0.0", port=port)
