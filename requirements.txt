@@ -1,14 +1,19 @@
-# FlowMe v3 - Version Flask Ultra-Simple (compatible Python 3.13)
-# Pas de Pydantic, pas de ForwardRef, juste Flask
+# FlowMe v3 Production - Requirements Finales
+# Version stable et testée
 
-# Framework web léger
-flask==3.0.0
-gunicorn==21.2.0
-uvicorn==0.23.2
+# Framework web principal
+fastapi==0.115.13
+uvicorn==0.34.3
 
-# HTTP client moderne
-httpx==0.24.1
-requests==2.31.0
+# Validation et sérialisation
+pydantic==2.11.7
 
-# JSON et utilitaires
-python-dateutil==2.8.2
+# Client HTTP moderne
+requests==2.32.4
+
+# Templates et configuration
+jinja2==3.1.6
+python-dotenv==1.1.1
+
+# Dépendances système
+typing-extensions==4.14.0
