@@ -20,29 +20,30 @@ logger = logging.getLogger(__name__)
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 NOCODB_URL = os.getenv("NOCODB_URL", "https://app.nocodb.com")
 NOCODB_API_KEY = os.getenv("NOCODB_API_KEY")
+NOCODB_STATES_TABLE_ID = os.getenv("NOCODB_STATES_TABLE_ID")
+NOCODB_REACTIONS_TABLE_ID = os.getenv("NOCODB_REACTIONS_TABLE_ID")
 
 # ==========================================
 # MODULE FLOWME DETECTOR INTÉGRÉ
 # ==========================================
 
 class FlowMeStateDetector:
-    def __init__(self, nocodb_url: str, nocodb_api_key: str, mistral_api_key: str):
+    def __init__(self, nocodb_url: str, nocodb_api_key: str, mistral_api_key: str, states_table_id: str = None, reactions_table_id: str = None):
         self.nocodb_url = nocodb_url
         self.nocodb_api_key = nocodb_api_key
         self.mistral_api_key = mistral_api_key
+        self.states_table_id = states_table_id
+        self.reactions_table_id = reactions_table_id
         self.flowme_states = {}
         self.mistral_client = httpx.AsyncClient()
         
     async def initialize(self):
         """Charge les états FlowMe (NocoDB ou par défaut)"""
         try:
-            if self.nocodb_api_key:
-                # TODO: Remplace par ton vrai ID de table NocoDB
-                states_table_id = "METTRE_TON_ID_TABLE_ETATS"
-                
+            if self.nocodb_api_key and self.states_table_id:
                 headers = {"xc-token": self.nocodb_api_key}
                 response = await self.mistral_client.get(
-                    f"{self.nocodb_url}/api/v1/db/data/noco/{states_table_id}", 
+                    f"{self.nocodb_url}/api/v1/db/data/noco/{self.states_table_id}", 
                     headers=headers
                 )
                 
@@ -53,10 +54,10 @@ class FlowMeStateDetector:
                     }
                     logger.info(f"✅ {len(self.flowme_states)} états FlowMe chargés depuis NocoDB")
                 else:
-                    logger.warning("❌ Échec chargement NocoDB, utilisation états par défaut")
+                    logger.warning(f"❌ Échec chargement NocoDB (HTTP {response.status_code}), utilisation états par défaut")
                     self._load_default_states()
             else:
-                logger.warning("⚠️ NOCODB_API_KEY manquante, utilisation états par défaut")
+                logger.warning("⚠️ NOCODB_API_KEY ou STATES_TABLE_ID manquants, utilisation états par défaut")
                 self._load_default_states()
                 
         except Exception as e:
@@ -176,13 +177,12 @@ class FlowMeStateDetector:
             return self._detect_by_keywords(message)
         
         detection_prompt = f"""
-        Analyse ce message et identifie l'état émotionnel principal :
-        
-        États possibles : Présence, Éveil, Curiosité, Joie, Tristesse, Colère, Peur, Amour, Solitude, Confusion
+        Analyse ce message et identifie l'état émotionnel principal parmi : Présence, Éveil, Curiosité, Joie, Tristesse, Colère, Peur, Amour, Solitude, Confusion
         
         Message : "{message}"
         
-        Réponds uniquement : {{"etat": "nom_etat", "confiance": 0.8}}
+        Réponds STRICTEMENT ce format JSON sans aucun autre texte :
+        {{"etat": "nom_etat", "confiance": 0.8}}
         """
         
         try:
@@ -301,13 +301,10 @@ class FlowMeStateDetector:
     
     async def _save_to_nocodb(self, message: str, state: Dict, confidence: float, response: str):
         """Sauvegarde optionnelle dans NocoDB"""
-        if not self.nocodb_api_key:
+        if not self.nocodb_api_key or not self.reactions_table_id:
             return
             
         try:
-            # TODO: Remplace par ton ID de table des réactions
-            reactions_table_id = "METTRE_TON_ID_TABLE_REACTIONS"
-            
             headers = {"xc-token": self.nocodb_api_key}
             data = {
                 "etat_id_flowme": state.get("ID_État"),
@@ -321,13 +318,15 @@ class FlowMeStateDetector:
             }
             
             response_save = await self.mistral_client.post(
-                f"{self.nocodb_url}/api/v1/db/data/noco/{reactions_table_id}",
+                f"{self.nocodb_url}/api/v1/db/data/noco/{self.reactions_table_id}",
                 headers=headers,
                 json=data
             )
             
             if response_save.status_code == 200:
                 logger.info("✅ Interaction sauvegardée dans NocoDB")
+            else:
+                logger.warning(f"❌ Échec sauvegarde NocoDB: {response_save.status_code}")
                 
         except Exception as e:
             logger.error(f"Erreur sauvegarde NocoDB: {e}")
@@ -378,7 +377,9 @@ async def startup_event():
         flowme_detector = FlowMeStateDetector(
             nocodb_url=NOCODB_URL,
             nocodb_api_key=NOCODB_API_KEY,
-            mistral_api_key=MISTRAL_API_KEY
+            mistral_api_key=MISTRAL_API_KEY,
+            states_table_id=NOCODB_STATES_TABLE_ID,
+            reactions_table_id=NOCODB_REACTIONS_TABLE_ID
         )
         
         await flowme_detector.initialize()
@@ -393,7 +394,7 @@ async def startup_event():
         logger.error(f"❌ Erreur d'initialisation: {e}")
         # Continue même en cas d'erreur pour permettre les tests
         if not flowme_detector:
-            flowme_detector = FlowMeStateDetector("", "", MISTRAL_API_KEY or "")
+            flowme_detector = FlowMeStateDetector("", "", MISTRAL_API_KEY or "", "", "")
             await flowme_detector.initialize()
 
 @app.get("/")
