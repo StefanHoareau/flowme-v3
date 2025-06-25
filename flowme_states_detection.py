@@ -1,322 +1,279 @@
-# flowme_states_detection.py - Version corrigée avec suggest_transition
-
+# FlowMe v3 - Module de détection d'états avec intégration NocoDB
+import httpx
+import json
 import re
-import random
-from typing import Dict, List, Tuple, Optional
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+import asyncio
+import logging
 
-# Configuration des 96 états de conscience Stefan Hoareau
-FLOWME_STATES = {
-    1: {
-        "name": "Présence",
-        "description": "État de conscience pure, d'attention au moment présent",
-        "keywords": ["maintenant", "présent", "ici", "moment", "attention", "conscience"],
-        "energy_level": "neutral",
-        "category": "awareness"
-    },
-    16: {
-        "name": "Amour",
-        "description": "Capacité d'aimer sans condition, ouverture du cœur",
-        "keywords": ["amour", "aimer", "cœur", "tendresse", "affection", "bienveillance"],
-        "energy_level": "high",
-        "category": "heart"
-    },
-    32: {
-        "name": "Joie",
-        "description": "Bonheur spontané, légèreté de l'être",
-        "keywords": ["joie", "bonheur", "rire", "sourire", "plaisir", "gaieté"],
-        "energy_level": "high",
-        "category": "emotion"
-    },
-    48: {
-        "name": "Paix",
-        "description": "Tranquillité intérieure, sérénité profonde",
-        "keywords": ["paix", "calme", "sérénité", "tranquillité", "repos", "silence"],
-        "energy_level": "low",
-        "category": "stillness"
-    },
-    64: {
-        "name": "Unité",
-        "description": "Sentiment d'union avec le tout, non-dualité",
-        "keywords": ["unité", "tout", "ensemble", "connexion", "fusion", "totalité"],
-        "energy_level": "transcendent",
-        "category": "unity"
-    },
-    # États émotionnels négatifs
-    8: {
-        "name": "Tristesse",
-        "description": "Mélancolie, peine intérieure",
-        "keywords": ["triste", "tristesse", "peine", "chagrin", "mélancolie", "pleure"],
-        "energy_level": "low",
-        "category": "emotion"
-    },
-    24: {
-        "name": "Colère",
-        "description": "Irritation, frustration, rage",
-        "keywords": ["colère", "rage", "frustration", "irrité", "énervé", "furieux"],
-        "energy_level": "high",
-        "category": "emotion"
-    },
-    40: {
-        "name": "Peur",
-        "description": "Anxiété, inquiétude, appréhension",
-        "keywords": ["peur", "anxiété", "stress", "inquiet", "angoisse", "crainte"],
-        "energy_level": "high",
-        "category": "emotion"
-    },
-    # États mentaux
-    4: {
-        "name": "Confusion",
-        "description": "Désorientation mentale, manque de clarté",
-        "keywords": ["confus", "perdu", "désorienté", "flou", "incompréhensible"],
-        "energy_level": "neutral",
-        "category": "mental"
-    },
-    12: {
-        "name": "Clarté",
-        "description": "Compréhension claire, lucidité",
-        "keywords": ["clair", "comprendre", "lucide", "évident", "précis"],
-        "energy_level": "neutral",
-        "category": "mental"
-    }
-}
+# Configuration des logs
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-def detect_primary_state(message: str, user_context: Dict = None) -> Dict:
-    """
-    Détecte l'état de conscience primaire basé sur le message de l'utilisateur
-    """
-    message_lower = message.lower()
-    
-    # Scores pour chaque état
-    state_scores = {}
-    
-    for state_id, state_info in FLOWME_STATES.items():
-        score = 0
+class FlowMeStateDetector:
+    def __init__(self, nocodb_url: str, nocodb_api_key: str, mistral_api_key: str):
+        self.nocodb_url = nocodb_url
+        self.nocodb_api_key = nocodb_api_key
+        self.mistral_api_key = mistral_api_key
+        self.flowme_states = {}
+        self.mistral_client = httpx.AsyncClient()
         
-        # Analyse des mots-clés
-        for keyword in state_info["keywords"]:
-            if keyword in message_lower:
-                score += 2
-                
-        # Analyse du contexte émotionnel
-        if state_info["category"] == "emotion":
-            if any(word in message_lower for word in ["ressens", "émotion", "sentiment"]):
-                score += 1
-                
-        # Analyse de l'énergie du message
-        if state_info["energy_level"] == "high" and any(word in message_lower for word in ["!", "très", "beaucoup"]):
-            score += 1
-        elif state_info["energy_level"] == "low" and any(word in message_lower for word in ["peu", "doucement", "calme"]):
-            score += 1
+    async def initialize(self):
+        """Charge les états FlowMe depuis NocoDB"""
+        try:
+            # Remplace par ton ID de table réel
+            states_table_id = "m8lwhj640ohzg7m"  # Table des états FlowMe
             
-        if score > 0:
-            state_scores[state_id] = score
+            headers = {"xc-token": self.nocodb_api_key}
+            response = await self.mistral_client.get(
+                f"{self.nocodb_url}/api/v1/db/data/noco/{states_table_id}", 
+                headers=headers
+            )
+            
+            if response.status_code == 200:
+                states_data = response.json()
+                self.flowme_states = {
+                    state["ID_État"]: state for state in states_data.get("list", [])
+                }
+                logger.info(f"✅ {len(self.flowme_states)} états FlowMe chargés depuis NocoDB")
+            else:
+                logger.warning("❌ Échec du chargement des états, utilisation des états par défaut")
+                self._load_default_states()
+                
+        except Exception as e:
+            logger.error(f"Erreur lors du chargement des états: {e}")
+            self._load_default_states()
     
-    # Retourne l'état avec le score le plus élevé, ou l'état de Présence par défaut
-    if state_scores:
-        primary_state_id = max(state_scores, key=state_scores.get)
-        confidence = min(state_scores[primary_state_id] * 0.2, 1.0)
-    else:
-        primary_state_id = 1  # État de Présence par défaut
-        confidence = 0.3
+    def _load_default_states(self):
+        """États par défaut en cas d'échec de chargement NocoDB"""
+        self.flowme_states = {
+            1: {
+                "ID_État": 1,
+                "Nom_État": "Présence",
+                "Famille_Symbolique": "Écoute subtile",
+                "Tension_Dominante": "Latente, intérieure",
+                "Mot_Clé": "Perception",
+                "Conseil_Flowme": "Quand tout semble brumeux, c'est dans le silence que la clarté peut émerger"
+            },
+            2: {
+                "ID_État": 2,
+                "Nom_État": "Éveil",
+                "Famille_Symbolique": "Conscience primordiale",
+                "Tension_Dominante": "Émergente",
+                "Mot_Clé": "Conscience",
+                "Conseil_Flowme": "Laisse les impressions se déposer avant de les catégoriser"
+            },
+            3: {
+                "ID_État": 3,
+                "Nom_État": "Curiosité",
+                "Famille_Symbolique": "Exploration",
+                "Tension_Dominante": "Dynamique",
+                "Mot_Clé": "Découverte",
+                "Conseil_Flowme": "L'inconnu n'est pas un vide à combler mais un espace à explorer"
+            }
+        }
     
-    return {
-        "state_id": primary_state_id,
-        "state_name": FLOWME_STATES[primary_state_id]["name"],
-        "description": FLOWME_STATES[primary_state_id]["description"],
-        "confidence": confidence,
-        "category": FLOWME_STATES[primary_state_id]["category"],
-        "energy_level": FLOWME_STATES[primary_state_id]["energy_level"]
-    }
-
-def suggest_transition(current_state_id: int, target_emotion: str = None) -> Dict:
-    """
-    Suggère une transition d'état basée sur l'état actuel et l'émotion cible
-    """
-    current_state = FLOWME_STATES.get(current_state_id, FLOWME_STATES[1])
+    async def analyze_emotional_state(self, message: str) -> Tuple[Dict, str]:
+        """Analyse l'état émotionnel et génère une réponse empathique"""
+        try:
+            # 1. Détection de l'état émotionnel
+            detected_state, confidence = await self._detect_state(message)
+            
+            # 2. Génération de la réponse empathique
+            empathic_response = await self._generate_empathic_response(
+                message, detected_state, confidence
+            )
+            
+            # 3. Sauvegarde dans NocoDB
+            await self._save_to_nocodb(message, detected_state, confidence, empathic_response)
+            
+            return detected_state, empathic_response
+            
+        except Exception as e:
+            logger.error(f"Erreur lors de l'analyse: {e}")
+            return self._get_default_state(), "Je suis là pour t'écouter. Peux-tu me dire ce que tu ressens en ce moment ?"
     
-    # Transitions recommandées basées sur l'état actuel
-    transitions = {
-        8: [1, 16, 48],    # Tristesse -> Présence, Amour, Paix
-        24: [48, 1, 16],   # Colère -> Paix, Présence, Amour
-        40: [1, 48, 12],   # Peur -> Présence, Paix, Clarté
-        4: [12, 1, 16],    # Confusion -> Clarté, Présence, Amour
-        1: [16, 32, 48],   # Présence -> Amour, Joie, Paix
-        16: [32, 64, 48],  # Amour -> Joie, Unité, Paix
-        32: [16, 64, 48],  # Joie -> Amour, Unité, Paix
-        48: [1, 16, 64],   # Paix -> Présence, Amour, Unité
-        12: [16, 32, 1],   # Clarté -> Amour, Joie, Présence
-        64: [16, 32, 48]   # Unité -> Amour, Joie, Paix
-    }
-    
-    # Obtenir les transitions possibles
-    possible_transitions = transitions.get(current_state_id, [1, 16, 48])
-    
-    # Sélectionner une transition appropriée
-    if target_emotion:
-        # Chercher un état correspondant à l'émotion cible
-        target_state_id = None
-        for state_id, state_info in FLOWME_STATES.items():
-            if target_emotion.lower() in [kw.lower() for kw in state_info["keywords"]]:
-                target_state_id = state_id
-                break
+    async def _detect_state(self, message: str) -> Tuple[Dict, float]:
+        """Détecte l'état émotionnel via l'analyse Mistral"""
         
-        if target_state_id and target_state_id in possible_transitions:
-            suggested_state_id = target_state_id
-        else:
-            suggested_state_id = possible_transitions[0]
-    else:
-        # Sélection intelligente basée sur l'état actuel
-        if current_state["energy_level"] == "high" and current_state["category"] == "emotion":
-            # Pour les émotions intenses, suggérer la paix ou la présence
-            suggested_state_id = next((s for s in possible_transitions if FLOWME_STATES[s]["energy_level"] in ["low", "neutral"]), possible_transitions[0])
-        else:
-            # Progression naturelle vers des états plus élevés
-            suggested_state_id = possible_transitions[0]
-    
-    suggested_state = FLOWME_STATES[suggested_state_id]
-    
-    return {
-        "current_state": {
-            "id": current_state_id,
-            "name": current_state["name"],
-            "description": current_state["description"]
-        },
-        "suggested_state": {
-            "id": suggested_state_id,
-            "name": suggested_state["name"],
-            "description": suggested_state["description"]
-        },
-        "transition_method": _get_transition_method(current_state_id, suggested_state_id),
-        "estimated_duration": _estimate_transition_duration(current_state_id, suggested_state_id)
-    }
-
-def _get_transition_method(from_state: int, to_state: int) -> str:
-    """
-    Retourne une méthode de transition recommandée
-    """
-    methods = {
-        (8, 1): "Respiration consciente et observation des sensations présentes",
-        (8, 16): "Pratique de l'auto-compassion et de la bienveillance envers soi",
-        (8, 48): "Méditation de pleine conscience et acceptation de l'émotion",
-        (24, 48): "Respiration profonde et relaxation musculaire progressive",
-        (24, 1): "Ancrage dans le moment présent par les sens",
-        (40, 1): "Techniques de grounding et de recentrage",
-        (40, 12): "Questionnement bienveillant et rationalisation",
-        (4, 12): "Pause réflexive et structuration de la pensée",
-        (1, 16): "Ouverture du cœur par la gratitude",
-        (16, 32): "Expression créative et partage de joie",
-        (32, 64): "Méditation sur l'interconnexion de toutes choses"
-    }
-    
-    return methods.get((from_state, to_state), "Méditation de pleine conscience et respiration consciente")
-
-def _estimate_transition_duration(from_state: int, to_state: int) -> str:
-    """
-    Estime la durée nécessaire pour la transition
-    """
-    current_energy = FLOWME_STATES[from_state]["energy_level"]
-    target_energy = FLOWME_STATES[to_state]["energy_level"]
-    
-    if current_energy == "high" and target_energy in ["low", "neutral"]:
-        return "15-30 minutes"
-    elif current_energy == "low" and target_energy == "high":
-        return "30-45 minutes"
-    elif current_energy == target_energy:
-        return "10-20 minutes"
-    else:
-        return "20-30 minutes"
-
-def analyze_emotional_pattern(message_history: List[str]) -> Dict:
-    """
-    Analyse les patterns émotionnels sur plusieurs messages
-    """
-    if not message_history:
-        return {"pattern": "insufficient_data", "recommendation": "Continue à partager pour une meilleure analyse"}
-    
-    states_detected = []
-    for message in message_history[-5:]:  # Analyser les 5 derniers messages
-        state = detect_primary_state(message)
-        states_detected.append(state)
-    
-    # Analyser la tendance
-    energy_levels = [s["energy_level"] for s in states_detected]
-    categories = [s["category"] for s in states_detected]
-    
-    pattern_analysis = {
-        "recent_states": states_detected,
-        "dominant_energy": max(set(energy_levels), key=energy_levels.count),
-        "dominant_category": max(set(categories), key=categories.count),
-        "stability": len(set([s["state_id"] for s in states_detected])) <= 2,
-        "progression": _analyze_progression(states_detected)
-    }
-    
-    return pattern_analysis
-
-def _analyze_progression(states: List[Dict]) -> str:
-    """
-    Analyse la progression émotionnelle
-    """
-    if len(states) < 2:
-        return "insufficient_data"
-    
-    state_ids = [s["state_id"] for s in states]
-    
-    # Vérifier si il y a amélioration (états vers plus positifs)
-    positive_states = [16, 32, 48, 64, 12]  # Amour, Joie, Paix, Unité, Clarté
-    negative_states = [8, 24, 40, 4]        # Tristesse, Colère, Peur, Confusion
-    
-    recent_positives = sum(1 for s in state_ids[-3:] if s in positive_states)
-    recent_negatives = sum(1 for s in state_ids[-3:] if s in negative_states)
-    
-    if recent_positives > recent_negatives:
-        return "positive_trend"
-    elif recent_negatives > recent_positives:
-        return "challenging_period"
-    else:
-        return "stable_mixed"
-
-# Fonction utilitaire pour l'API
-def get_all_states() -> Dict:
-    """
-    Retourne tous les états disponibles
-    """
-    return FLOWME_STATES
-
-def get_state_by_id(state_id: int) -> Optional[Dict]:
-    """
-    Retourne un état spécifique par son ID
-    """
-    return FLOWME_STATES.get(state_id)
-
-def search_states_by_keyword(keyword: str) -> List[Dict]:
-    """
-    Recherche des états par mot-clé
-    """
-    results = []
-    keyword_lower = keyword.lower()
-    
-    for state_id, state_info in FLOWME_STATES.items():
-        if (keyword_lower in state_info["name"].lower() or 
-            keyword_lower in state_info["description"].lower() or
-            any(keyword_lower in kw.lower() for kw in state_info["keywords"])):
+        # Prompt pour la détection d'état
+        detection_prompt = f"""
+        Analyse ce message et identifie l'état émotionnel principal parmi ces catégories FlowMe :
+        
+        - Présence (perception, écoute subtile)
+        - Éveil (conscience, émergence)
+        - Curiosité (exploration, découverte)
+        - Joie (épanouissement, énergie positive)
+        - Tristesse (mélancolie, introspection)
+        - Colère (frustration, révolte)
+        - Peur (anxiété, inquiétude)
+        - Amour (connexion, bienveillance)
+        - Solitude (isolement, retrait)
+        - Confusion (désorientation, questionnement)
+        
+        Message à analyser : "{message}"
+        
+        Réponds uniquement avec ce format JSON :
+        {{"etat": "nom_etat", "confiance": 0.85, "raison": "explication courte"}}
+        """
+        
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.mistral_api_key}",
+                "Content-Type": "application/json"
+            }
             
-            results.append({
-                "id": state_id,
-                "name": state_info["name"],
-                "description": state_info["description"],
-                "category": state_info["category"],
-                "energy_level": state_info["energy_level"]
-            })
+            payload = {
+                "model": "mistral-small-latest",
+                "messages": [{"role": "user", "content": detection_prompt}],
+                "max_tokens": 150,
+                "temperature": 0.3
+            }
+            
+            response = await self.mistral_client.post(
+                "https://api.mistral.ai/v1/chat/completions",
+                headers=headers,
+                json=payload
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                content = result["choices"][0]["message"]["content"]
+                
+                # Parse le JSON de réponse
+                try:
+                    parsed = json.loads(content)
+                    state_name = parsed.get("etat", "Présence")
+                    confidence = float(parsed.get("confiance", 0.5))
+                    
+                    # Trouve l'état correspondant
+                    detected_state = self._find_state_by_name(state_name)
+                    return detected_state, confidence
+                    
+                except json.JSONDecodeError:
+                    logger.warning("Réponse Mistral non-JSON, utilisation état par défaut")
+                    
+        except Exception as e:
+            logger.error(f"Erreur détection Mistral: {e}")
+            
+        return self._get_default_state(), 0.5
     
-    return results
+    async def _generate_empathic_response(self, message: str, state: Dict, confidence: float) -> str:
+        """Génère une réponse empathique basée sur l'état détecté"""
+        
+        state_name = state.get("Nom_État", "Présence")
+        conseil = state.get("Conseil_Flowme", "")
+        
+        empathy_prompt = f"""
+        Tu es FlowMe, une IA empathique spécialisée dans l'accompagnement émotionnel.
+        
+        L'utilisateur a écrit : "{message}"
+        
+        État émotionnel détecté : {state_name} (confiance: {confidence:.0%})
+        Conseil FlowMe associé : {conseil}
+        
+        Génère une réponse empathique qui :
+        1. Reconnaît et valide l'émotion
+        2. Offre un soutien adapté
+        3. Intègre subtilement le conseil FlowMe
+        4. Reste naturelle et bienveillante
+        
+        Limite : 150 mots maximum.
+        """
+        
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.mistral_api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "model": "mistral-small-latest",
+                "messages": [{"role": "user", "content": empathy_prompt}],
+                "max_tokens": 200,
+                "temperature": 0.7
+            }
+            
+            response = await self.mistral_client.post(
+                "https://api.mistral.ai/v1/chat/completions",
+                headers=headers,
+                json=payload
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                return result["choices"][0]["message"]["content"].strip()
+                
+        except Exception as e:
+            logger.error(f"Erreur génération réponse: {e}")
+            
+        # Réponse par défaut
+        return f"Je perçois que tu traverses un moment de {state_name.lower()}. {conseil}"
+    
+    async def _save_to_nocodb(self, message: str, state: Dict, confidence: float, response: str):
+        """Sauvegarde l'interaction dans NocoDB"""
+        try:
+            # Remplace par ton ID de table des réactions
+            reactions_table_id = "reactions_table_id"  # À mettre à jour
+            
+            headers = {"xc-token": self.nocodb_api_key}
+            data = {
+                "etat_id_flowme": state.get("ID_État"),
+                "tension_dominante": state.get("Tension_Dominante"),
+                "famille_symbolique": state.get("Famille_Symbolique"),
+                "timestamp": datetime.utcnow().isoformat(),
+                "etat_nom": state.get("Nom_État"),
+                "posture_adaptative": state.get("Posture_Adaptative"),
+                "session_id": f"session_{datetime.now().strftime('%Y%m%d_%H%M')}",
+                "pattern_detecte": message[:100],  # Tronqué pour la base
+                "score_bien_etre": confidence,
+                "recommandations": response,
+                "evolution_tendance": "stable"
+            }
+            
+            response = await self.mistral_client.post(
+                f"{self.nocodb_url}/api/v1/db/data/noco/{reactions_table_id}",
+                headers=headers,
+                json=data
+            )
+            
+            if response.status_code == 200:
+                logger.info("✅ Interaction sauvegardée dans NocoDB")
+            else:
+                logger.warning(f"❌ Échec sauvegarde NocoDB: {response.status_code}")
+                
+        except Exception as e:
+            logger.error(f"Erreur sauvegarde NocoDB: {e}")
+    
+    def _find_state_by_name(self, name: str) -> Dict:
+        """Trouve un état par son nom"""
+        for state in self.flowme_states.values():
+            if state.get("Nom_État", "").lower() == name.lower():
+                return state
+        return self._get_default_state()
+    
+    def _get_default_state(self) -> Dict:
+        """Retourne l'état par défaut"""
+        return list(self.flowme_states.values())[0] if self.flowme_states else {
+            "ID_État": 1,
+            "Nom_État": "Présence",
+            "Famille_Symbolique": "Écoute subtile",
+            "Conseil_Flowme": "Je suis là pour t'écouter"
+        }
 
-# Configuration pour l'export
-__all__ = [
-    'detect_primary_state',
-    'suggest_transition',
-    'analyze_emotional_pattern',
-    'get_all_states',
-    'get_state_by_id',
-    'search_states_by_keyword',
-    'FLOWME_STATES'
-]
+# Fonction d'initialisation pour main.py
+async def create_flowme_detector(nocodb_url: str, nocodb_api_key: str, mistral_api_key: str):
+    """Crée et initialise le détecteur FlowMe"""
+    detector = FlowMeStateDetector(nocodb_url, nocodb_api_key, mistral_api_key)
+    await detector.initialize()
+    return detector
+
+# Fonction suggérée pour main.py
+async def suggest_transition(message: str, detector: FlowMeStateDetector) -> Tuple[str, float]:
+    """Fonction de transition suggérée (compatibilité avec l'ancien code)"""
+    detected_state, response = await detector.analyze_emotional_state(message)
+    state_name = detected_state.get("Nom_État", "Présence")
+    
+    # Retourne le format attendu par ton interface
+    return f"{state_name}", 0.8  # Confiance par défaut
