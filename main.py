@@ -1,4 +1,4 @@
-# main.py - FlowMe v3 API avec gestion d'erreurs robuste
+# main.py - FlowMe v3 avec module intégré (solution temporaire)
 
 import os
 import asyncio
@@ -14,47 +14,175 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 import httpx
 
-# Import avec gestion d'erreur
-try:
-    from flowme_states_detection import (
-        detect_primary_state,
-        suggest_transition,
-        analyze_emotional_pattern,
-        get_all_states,
-        FLOWME_STATES
-    )
-    print("✅ Module flowme_states_detection importé avec succès")
-except ImportError as e:
-    print(f"❌ Erreur import flowme_states_detection: {e}")
-    # Fonctions de fallback en cas d'erreur
-    def detect_primary_state(message: str, user_context: Dict = None) -> Dict:
-        return {
-            "state_id": 1,
-            "state_name": "Présence",
-            "description": "État de conscience pure, d'attention au moment présent",
-            "confidence": 0.5,
-            "category": "awareness",
-            "energy_level": "neutral"
-        }
-    
-    def suggest_transition(current_state_id: int, target_emotion: str = None) -> Dict:
-        return {
-            "current_state": {"id": current_state_id, "name": "État actuel", "description": "État de conscience actuel"},
-            "suggested_state": {"id": 1, "name": "Présence", "description": "État de conscience pure"},
-            "transition_method": "Respiration consciente et observation du moment présent",
-            "estimated_duration": "15-30 minutes"
-        }
-    
-    def analyze_emotional_pattern(message_history: List[str]) -> Dict:
-        return {"pattern": "fallback_mode", "recommendation": "Module de détection non disponible"}
-    
-    def get_all_states() -> Dict:
-        return {1: {"name": "Présence", "description": "État de base", "keywords": ["présent"], "energy_level": "neutral", "category": "awareness"}}
-    
-    FLOWME_STATES = get_all_states()
-    raise e  # Arrêter l'application si le module ne fonctionne pas
+# ============ MODULE FLOWME STATES INTÉGRÉ ============
+# Configuration des états de conscience Stefan Hoareau
+FLOWME_STATES = {
+    1: {
+        "name": "Présence",
+        "description": "État de conscience pure, d'attention au moment présent",
+        "keywords": ["maintenant", "présent", "ici", "moment", "attention", "conscience"],
+        "energy_level": "neutral",
+        "category": "awareness"
+    },
+    16: {
+        "name": "Amour",
+        "description": "Capacité d'aimer sans condition, ouverture du cœur",
+        "keywords": ["amour", "aimer", "cœur", "tendresse", "affection", "bienveillance"],
+        "energy_level": "high",
+        "category": "heart"
+    },
+    32: {
+        "name": "Joie",
+        "description": "Bonheur spontané, légèreté de l'être",
+        "keywords": ["joie", "bonheur", "rire", "sourire", "plaisir", "gaieté"],
+        "energy_level": "high",
+        "category": "emotion"
+    },
+    48: {
+        "name": "Paix",
+        "description": "Tranquillité intérieure, sérénité profonde",
+        "keywords": ["paix", "calme", "sérénité", "tranquillité", "repos", "silence"],
+        "energy_level": "low",
+        "category": "stillness"
+    },
+    64: {
+        "name": "Unité",
+        "description": "Sentiment d'union avec le tout, non-dualité",
+        "keywords": ["unité", "tout", "ensemble", "connexion", "fusion", "totalité"],
+        "energy_level": "transcendent",
+        "category": "unity"
+    },
+    8: {
+        "name": "Tristesse",
+        "description": "Mélancolie, peine intérieure",
+        "keywords": ["triste", "tristesse", "peine", "chagrin", "mélancolie", "pleure"],
+        "energy_level": "low",
+        "category": "emotion"
+    },
+    24: {
+        "name": "Colère",
+        "description": "Irritation, frustration, rage",
+        "keywords": ["colère", "rage", "frustration", "irrité", "énervé", "furieux"],
+        "energy_level": "high",
+        "category": "emotion"
+    },
+    40: {
+        "name": "Peur",
+        "description": "Anxiété, inquiétude, appréhension",
+        "keywords": ["peur", "anxiété", "stress", "inquiet", "angoisse", "crainte"],
+        "energy_level": "high",
+        "category": "emotion"
+    },
+    4: {
+        "name": "Confusion",
+        "description": "Désorientation mentale, manque de clarté",
+        "keywords": ["confus", "perdu", "désorienté", "flou", "incompréhensible"],
+        "energy_level": "neutral",
+        "category": "mental"
+    },
+    12: {
+        "name": "Clarté",
+        "description": "Compréhension claire, lucidité",
+        "keywords": ["clair", "comprendre", "lucide", "évident", "précis"],
+        "energy_level": "neutral",
+        "category": "mental"
+    }
+}
 
-# Configuration
+def detect_primary_state(message: str, user_context: Dict = None) -> Dict:
+    """Détecte l'état de conscience primaire basé sur le message de l'utilisateur"""
+    message_lower = message.lower()
+    state_scores = {}
+    
+    for state_id, state_info in FLOWME_STATES.items():
+        score = 0
+        for keyword in state_info["keywords"]:
+            if keyword in message_lower:
+                score += 2
+        
+        if state_info["category"] == "emotion":
+            if any(word in message_lower for word in ["ressens", "émotion", "sentiment"]):
+                score += 1
+        
+        if state_info["energy_level"] == "high" and any(word in message_lower for word in ["!", "très", "beaucoup"]):
+            score += 1
+        elif state_info["energy_level"] == "low" and any(word in message_lower for word in ["peu", "doucement", "calme"]):
+            score += 1
+            
+        if score > 0:
+            state_scores[state_id] = score
+    
+    if state_scores:
+        primary_state_id = max(state_scores, key=state_scores.get)
+        confidence = min(state_scores[primary_state_id] * 0.2, 1.0)
+    else:
+        primary_state_id = 1
+        confidence = 0.3
+    
+    return {
+        "state_id": primary_state_id,
+        "state_name": FLOWME_STATES[primary_state_id]["name"],
+        "description": FLOWME_STATES[primary_state_id]["description"],
+        "confidence": confidence,
+        "category": FLOWME_STATES[primary_state_id]["category"],
+        "energy_level": FLOWME_STATES[primary_state_id]["energy_level"]
+    }
+
+def suggest_transition(current_state_id: int, target_emotion: str = None) -> Dict:
+    """Suggère une transition d'état basée sur l'état actuel"""
+    current_state = FLOWME_STATES.get(current_state_id, FLOWME_STATES[1])
+    
+    transitions = {
+        8: [1, 16, 48],    # Tristesse -> Présence, Amour, Paix
+        24: [48, 1, 16],   # Colère -> Paix, Présence, Amour
+        40: [1, 48, 12],   # Peur -> Présence, Paix, Clarté
+        4: [12, 1, 16],    # Confusion -> Clarté, Présence, Amour
+        1: [16, 32, 48],   # Présence -> Amour, Joie, Paix
+        16: [32, 64, 48],  # Amour -> Joie, Unité, Paix
+        32: [16, 64, 48],  # Joie -> Amour, Unité, Paix
+        48: [1, 16, 64],   # Paix -> Présence, Amour, Unité
+        12: [16, 32, 1],   # Clarté -> Amour, Joie, Présence
+        64: [16, 32, 48]   # Unité -> Amour, Joie, Paix
+    }
+    
+    possible_transitions = transitions.get(current_state_id, [1, 16, 48])
+    suggested_state_id = possible_transitions[0]
+    suggested_state = FLOWME_STATES[suggested_state_id]
+    
+    methods = {
+        (8, 1): "Respiration consciente et observation des sensations présentes",
+        (8, 16): "Pratique de l'auto-compassion et de la bienveillance envers soi",
+        (24, 48): "Respiration profonde et relaxation musculaire progressive",
+        (40, 1): "Techniques de grounding et de recentrage",
+        (4, 12): "Pause réflexive et structuration de la pensée"
+    }
+    
+    return {
+        "current_state": {
+            "id": current_state_id,
+            "name": current_state["name"],
+            "description": current_state["description"]
+        },
+        "suggested_state": {
+            "id": suggested_state_id,
+            "name": suggested_state["name"],
+            "description": suggested_state["description"]
+        },
+        "transition_method": methods.get((current_state_id, suggested_state_id), "Méditation de pleine conscience"),
+        "estimated_duration": "15-30 minutes"
+    }
+
+def analyze_emotional_pattern(message_history: List[str]) -> Dict:
+    """Analyse les patterns émotionnels"""
+    return {"pattern": "stable", "recommendation": "Continue à partager tes émotions"}
+
+def get_all_states() -> Dict:
+    """Retourne tous les états disponibles"""
+    return FLOWME_STATES
+
+print("✅ Module flowme_states_detection intégré avec succès")
+
+# ============ CONFIGURATION ============
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 NOCODB_API_TOKEN = os.getenv("NOCODB_API_TOKEN") or os.getenv("NOCODB_API_KEY")
 NOCODB_BASE_URL = os.getenv("NOCODB_BASE_URL") or os.getenv("NOCODB_URL", "https://app.nocodb.com")
@@ -84,7 +212,6 @@ class StateDetectionResponse(BaseModel):
 # Contexte d'application
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
     print("🚀 Démarrage de FlowMe v3")
     print(f"✅ Mistral API: {'✓ Configuré' if MISTRAL_API_KEY else '✗ Manquant'}")
     print(f"✅ NocoDB: {'✓ Configuré' if NOCODB_API_TOKEN else '✗ Manquant'}")
@@ -93,7 +220,6 @@ async def lifespan(app: FastAPI):
     if NOCODB_REACTIONS_TABLE_ID:
         print(f"📋 Table ID: {NOCODB_REACTIONS_TABLE_ID}")
     yield
-    # Shutdown
     print("🛑 Arrêt de FlowMe v3")
 
 # Application FastAPI
@@ -116,7 +242,7 @@ app.add_middleware(
 # Client HTTP global
 http_client = httpx.AsyncClient(timeout=30.0)
 
-# Session storage simple (en mémoire)
+# Session storage simple
 active_sessions = {}
 
 # ============ ROUTES API ============
@@ -274,31 +400,25 @@ async def get_interface():
                 const message = input.value.trim();
                 if (!message) return;
                 
-                // Afficher le message utilisateur
                 const userDiv = document.createElement('div');
                 userDiv.className = 'message user-message';
                 userDiv.innerHTML = `<div>${message}</div>`;
                 container.appendChild(userDiv);
                 
-                // Afficher loading
                 const loadingDiv = document.createElement('div');
                 loadingDiv.className = 'loading';
                 loadingDiv.textContent = 'FlowMe réfléchit...';
                 container.appendChild(loadingDiv);
                 
-                // Désactiver l'interface
                 input.value = '';
                 input.disabled = true;
                 button.disabled = true;
-                
                 container.scrollTop = container.scrollHeight;
                 
                 try {
                     const response = await fetch('/chat', {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
+                        headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             message: message,
                             session_id: sessionId
@@ -306,12 +426,9 @@ async def get_interface():
                     });
                     
                     const data = await response.json();
-                    
-                    // Supprimer loading
                     container.removeChild(loadingDiv);
                     
                     if (response.ok) {
-                        // Afficher la réponse IA
                         const aiDiv = document.createElement('div');
                         aiDiv.className = 'message ai-message';
                         aiDiv.innerHTML = `
@@ -322,11 +439,8 @@ async def get_interface():
                             </div>
                         `;
                         container.appendChild(aiDiv);
-                        
-                        // Mettre à jour le badge de statut
                         document.getElementById('statusBadge').textContent = '🟢 Production';
                     } else {
-                        // Afficher l'erreur
                         const errorDiv = document.createElement('div');
                         errorDiv.className = 'message ai-message';
                         errorDiv.innerHTML = `
@@ -334,7 +448,6 @@ async def get_interface():
                             <div class="state-info">Mode dégradé activé</div>
                         `;
                         container.appendChild(errorDiv);
-                        
                         document.getElementById('statusBadge').textContent = '🟡 Dégradé';
                     }
                 } catch (error) {
@@ -348,26 +461,21 @@ async def get_interface():
                         <div class="state-info">Erreur réseau</div>
                     `;
                     container.appendChild(errorDiv);
-                    
                     document.getElementById('statusBadge').textContent = '🔴 Hors ligne';
                 }
                 
-                // Réactiver l'interface
                 input.disabled = false;
                 button.disabled = false;
                 input.focus();
-                
                 container.scrollTop = container.scrollHeight;
             }
             
-            // Envoyer avec Entrée
             document.getElementById('messageInput').addEventListener('keypress', function(e) {
                 if (e.key === 'Enter') {
                     sendMessage();
                 }
             });
             
-            // Focus initial
             document.getElementById('messageInput').focus();
         </script>
     </body>
@@ -451,7 +559,6 @@ async def detect_state_endpoint(chat_message: ChatMessage):
 async def health_check():
     """Vérification de l'état de santé de l'API"""
     try:
-        # Test des composants
         mistral_status = "✓" if MISTRAL_API_KEY else "✗"
         nocodb_status = "✓" if NOCODB_API_TOKEN else "✗"
         states_count = len(FLOWME_STATES)
@@ -481,7 +588,6 @@ async def generate_empathic_response(message: str, detected_state: Dict, user_id
         if not MISTRAL_API_KEY:
             return await generate_fallback_response(detected_state)
         
-        # Construire le prompt empathique
         state_name = detected_state["state_name"]
         state_description = detected_state["description"]
         confidence = detected_state["confidence"]
@@ -501,7 +607,6 @@ Réponds de manière empathique et bienveillante en:
 
 Ton ton doit être chaleureux, authentique et profondément empathique."""
 
-        # Appel à l'API Mistral
         headers = {
             "Authorization": f"Bearer {MISTRAL_API_KEY}",
             "Content-Type": "application/json"
@@ -581,7 +686,6 @@ async def save_interaction_to_nocodb(user_id: str, message: str, ai_response: st
         # Tentative de sauvegarde avec votre table ID spécifique
         table_endpoint = f"{NOCODB_BASE_URL}/api/v1/db/data/noco/flowme/reactions"
         if NOCODB_REACTIONS_TABLE_ID:
-            # Utiliser l'ID de table spécifique si fourni
             table_endpoint = f"{NOCODB_BASE_URL}/api/v1/db/data/{NOCODB_REACTIONS_TABLE_ID}"
         
         response = await http_client.post(
