@@ -1,19 +1,20 @@
-# FlowMe v3 Production - Requirements Finales
-# Version stable et testée
+# requirements.txt - FlowMe v3 - Versions stables Python 3.11/3.13
 
-# Framework web principal
-fastapi==0.115.13
-uvicorn==0.34.3
+# Framework web
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
 
-# Validation et sérialisation
-pydantic==2.11.7
+# Client HTTP (compatible Python 3.13)
+httpx==0.25.2
 
-# Client HTTP moderne
-requests==2.32.4
+# Validation de données
+pydantic==2.5.0
 
-# Templates et configuration
-jinja2==3.1.6
-python-dotenv==1.1.1
+# Support CORS
+python-multipart==0.0.6
 
-# Dépendances système
-typing-extensions==4.14.0
+# Utilitaires
+python-dotenv==1.0.0
+
+# Logging et debugging
+structlog==23.2.0
