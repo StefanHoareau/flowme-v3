@@ -1,20 +1,20 @@
-# requirements.txt - FlowMe v3 - Versions stables Python 3.11/3.13
+# requirements.txt - FlowMe v3 - Versions stables
 
 # Framework web
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 
-# Client HTTP (compatible Python 3.13)
+# Client HTTP (remplace aiohttp pour compatibilité Python 3.13)
 httpx==0.25.2
 
 # Validation de données
 pydantic==2.5.0
 
-# Support CORS
+# Support CORS et formulaires
 python-multipart==0.0.6
 
-# Utilitaires
+# Variables d'environnement
 python-dotenv==1.0.0
 
-# Logging et debugging
-structlog==23.2.0
+# Utilitaires de base (optionnel)
+jinja2==3.1.6
