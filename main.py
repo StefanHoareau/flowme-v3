@@ -56,8 +56,9 @@ except ImportError as e:
 
 # Configuration
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
-NOCODB_API_TOKEN = os.getenv("NOCODB_API_TOKEN")
-NOCODB_BASE_URL = os.getenv("NOCODB_BASE_URL", "https://app.nocodb.com")
+NOCODB_API_TOKEN = os.getenv("NOCODB_API_TOKEN") or os.getenv("NOCODB_API_KEY")
+NOCODB_BASE_URL = os.getenv("NOCODB_BASE_URL") or os.getenv("NOCODB_URL", "https://app.nocodb.com")
+NOCODB_REACTIONS_TABLE_ID = os.getenv("NOCODB_REACTIONS_TABLE_ID")
 
 # Modèles Pydantic
 class ChatMessage(BaseModel):
@@ -85,9 +86,12 @@ class StateDetectionResponse(BaseModel):
 async def lifespan(app: FastAPI):
     # Startup
     print("🚀 Démarrage de FlowMe v3")
-    print(f"✅ Mistral API: {'✓' if MISTRAL_API_KEY else '✗'}")
-    print(f"✅ NocoDB: {'✓' if NOCODB_API_TOKEN else '✗'}")
+    print(f"✅ Mistral API: {'✓ Configuré' if MISTRAL_API_KEY else '✗ Manquant'}")
+    print(f"✅ NocoDB: {'✓ Configuré' if NOCODB_API_TOKEN else '✗ Manquant'}")
     print(f"📊 États disponibles: {len(FLOWME_STATES)}")
+    print(f"🔗 NocoDB Base URL: {NOCODB_BASE_URL}")
+    if NOCODB_REACTIONS_TABLE_ID:
+        print(f"📋 Table ID: {NOCODB_REACTIONS_TABLE_ID}")
     yield
     # Shutdown
     print("🛑 Arrêt de FlowMe v3")
@@ -574,9 +578,14 @@ async def save_interaction_to_nocodb(user_id: str, message: str, ai_response: st
             "created_at": datetime.now().isoformat()
         }
         
-        # Tentative de sauvegarde (URL à adapter selon votre configuration NocoDB)
+        # Tentative de sauvegarde avec votre table ID spécifique
+        table_endpoint = f"{NOCODB_BASE_URL}/api/v1/db/data/noco/flowme/reactions"
+        if NOCODB_REACTIONS_TABLE_ID:
+            # Utiliser l'ID de table spécifique si fourni
+            table_endpoint = f"{NOCODB_BASE_URL}/api/v1/db/data/{NOCODB_REACTIONS_TABLE_ID}"
+        
         response = await http_client.post(
-            f"{NOCODB_BASE_URL}/api/v1/db/data/noco/flowme/interactions",
+            table_endpoint,
             headers=headers,
             json=interaction_data
         )
