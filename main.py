@@ -386,8 +386,10 @@ async def startup_event():
         
         logger.info("✅ Module flowme_states_detection intégré avec succès")
         logger.info("🚀 Démarrage de FlowMe v3")
-        logger.info(f"✅ Mistral API: {'✓ Configuré' if MISTRAL_API_KEY else '⚠️ Mode dégradé'}")
+        logger.info(f"✅ Mistral API: {'✓ Configuré' if MISTRAL_API_KEY else '❌ Manquante'}")
         logger.info(f"✅ NocoDB: {'✓ Configuré' if NOCODB_API_KEY else '⚠️ Mode dégradé'}")
+        logger.info(f"🔧 States Table ID: {NOCODB_STATES_TABLE_ID or 'MANQUANT'}")
+        logger.info(f"🔧 Reactions Table ID: {NOCODB_REACTIONS_TABLE_ID or 'MANQUANT'}")
         logger.info(f"📊 États disponibles: {len(flowme_detector.flowme_states)}")
         
     except Exception as e:
