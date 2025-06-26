@@ -20,7 +20,7 @@ app = FastAPI(title="FlowMe v3", version="3.0.0")
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 NOCODB_URL = os.getenv("NOCODB_URL", "https://app.nocodb.com")
 NOCODB_API_KEY = os.getenv("NOCODB_API_KEY")
-NOCODB_STATES_TABLE_ID = os.getenv("NOCODB_STATES_TABLE_ID", "mpcze1flcb4x64x")
+NOCODB_STATES_TABLE_ID = os.getenv("NOCODB_STATES_TABLE_ID", "REMPLACEZ_PAR_LE_VRAI_ID")
 NOCODB_REACTIONS_TABLE_ID = os.getenv("NOCODB_REACTIONS_TABLE_ID", "m8lwhj640ohzg7m")
 
 # États par défaut - UTILISÉS SEULEMENT SI NOCODB_STATES_TABLE_ID n'est pas configuré
@@ -267,6 +267,8 @@ Ton but est d'offrir un soutien émotionnel authentique."""
 @app.on_event("startup")
 async def startup_event():
     """Initialisation au démarrage"""
+    global flowme_states
+    
     try:
         await load_nocodb_states()
         logger.info("🚀 Démarrage de FlowMe v3")
@@ -279,7 +281,6 @@ async def startup_event():
         logger.error(f"💥 Erreur critique au démarrage: {e}")
         if NOCODB_STATES_TABLE_ID == "REMPLACEZ_PAR_LE_VRAI_ID":
             logger.error("🚨 Table ID non configuré - utilisation des états par défaut")
-            global flowme_states
             flowme_states = FlowMeStatesDetection(DEFAULT_STATES)
         else:
             logger.error("🚨 Erreur configuration NocoDB - service en mode dégradé")
