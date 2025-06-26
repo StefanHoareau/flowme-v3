@@ -122,8 +122,9 @@ async def load_nocodb_states():
                 
                 for record in records:
                     if isinstance(record, dict):
-                        # Recherche du nom de l'état dans différents champs possibles
-                        name = (record.get("etat_nom") or 
+                        # Recherche du nom de l'état avec les vrais noms de colonnes
+                        name = (record.get("Nom_État") or 
+                               record.get("etat_nom") or 
                                record.get("État") or 
                                record.get("Nom") or 
                                record.get("Name") or 
@@ -132,7 +133,7 @@ async def load_nocodb_states():
                         
                         if name:
                             states_dict[name] = {
-                                "description": (record.get("tension_dominante") or
+                                "description": (record.get("Tension_Dominante") or
                                               record.get("Description") or 
                                               record.get("description") or ""),
                                 "color": (record.get("Couleur") or 
