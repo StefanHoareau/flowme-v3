@@ -93,7 +93,7 @@ async def load_nocodb_states():
     
     try:
         headers = {
-            "accept": "application/json",
+            "accept": "application/json; charset=utf-8",
             "xc-token": NOCODB_API_KEY
         }
         
@@ -122,22 +122,19 @@ async def load_nocodb_states():
                 
                 for record in records:
                     if isinstance(record, dict):
-                        # Recherche du nom de l'état avec les vrais noms de colonnes
+                        # Utilisation des vrais noms de colonnes de la table flowmeAI
                         name = (record.get("Nom_État") or 
                                record.get("etat_nom") or 
                                record.get("État") or 
-                               record.get("Nom") or 
-                               record.get("Name") or 
-                               record.get("titre") or
-                               record.get("Title"))
+                               record.get("Name"))
                         
                         if name:
                             states_dict[name] = {
                                 "description": (record.get("Tension_Dominante") or
-                                              record.get("Description") or 
-                                              record.get("description") or ""),
+                                              record.get("Conseil_Flowme") or
+                                              record.get("Famille_Symbolique") or 
+                                              record.get("Description") or ""),
                                 "color": (record.get("Couleur") or 
-                                         record.get("couleur") or 
                                          record.get("Color") or "#808080"),
                                 "emoji": (record.get("Emoji") or 
                                          record.get("emoji") or "😐")
@@ -178,18 +175,20 @@ async def save_to_nocodb(user_message: str, ai_response: str, detected_state: st
     try:
         headers = {
             "accept": "application/json",
-            "Content-Type": "application/json",
+            "Content-Type": "application/json; charset=utf-8",
             "xc-token": NOCODB_API_KEY
         }
         
         url = f"{NOCODB_URL}/api/v2/tables/{NOCODB_REACTIONS_TABLE_ID}/records"
         
+        # Utilisation des vrais noms de colonnes de Reactions_Mistral
         payload = {
-            "User_Message": user_message[:500],
-            "AI_Response": ai_response[:1000],
-            "Detected_State": detected_state,
-            "User_ID": user_id,
-            "Timestamp": datetime.now().isoformat()
+            "etat_nom": detected_state,
+            "tension_dominante": ai_response[:1000],
+            "famille_symbolique": user_message[:500],
+            "posture_adaptative": f"Message utilisateur: {user_message[:200]}",
+            "session_id": user_id,
+            "timestamp": datetime.now().isoformat()
         }
         
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -230,7 +229,7 @@ Ton but est d'offrir un soutien émotionnel authentique."""
 
         headers = {
             "Authorization": f"Bearer {MISTRAL_API_KEY}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json; charset=utf-8"
         }
         
         payload = {
@@ -300,6 +299,7 @@ async def home():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
         <title>FlowMe v3 - Votre Compagnon Émotionnel IA</title>
         <style>
             * {{
