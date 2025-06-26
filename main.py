@@ -20,7 +20,6 @@ app = FastAPI(title="FlowMe v3", version="3.0.0")
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 NOCODB_URL = os.getenv("NOCODB_URL", "https://app.nocodb.com")
 NOCODB_API_KEY = os.getenv("NOCODB_API_KEY")
-NOCODB_BASE_ID = os.getenv("NOCODB_BASE_ID", "pec4m87iywf0ayu")  # Base ID explicite
 NOCODB_STATES_TABLE_ID = os.getenv("NOCODB_STATES_TABLE_ID", "mpcze1f1cb4x64x")
 NOCODB_REACTIONS_TABLE_ID = os.getenv("NOCODB_REACTIONS_TABLE_ID", "m8lwhj640ohzg7m")
 
@@ -71,91 +70,115 @@ class FlowMeStatesDetection:
 # Instance globale
 flowme_states = None
 
+async def test_multiple_table_ids():
+    """Test plusieurs Table IDs possibles"""
+    if not NOCODB_API_KEY:
+        return
+    
+    # IDs à tester (ajoutez d'autres si vous en trouvez)
+    test_ids = [
+        "mpcze1f1cb4x64x",  # ID actuel
+        "mpcze11cb4x64x",   # Variation possible
+        "flowmeAI",         # Nom de table direct
+        # Ajoutez d'autres IDs que vous trouvez dans API Snippets
+    ]
+    
+    headers = {
+        "accept": "application/json",
+        "xc-token": NOCODB_API_KEY
+    }
+    
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for table_id in test_ids:
+            try:
+                url = f"{NOCODB_URL}/api/v2/tables/{table_id}/records"
+                logger.info(f"🧪 Test ID: {table_id} → {url}")
+                
+                response = await client.get(url, headers=headers)
+                logger.info(f"📊 Résultat {table_id}: HTTP {response.status_code}")
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    records = data.get("list", []) if isinstance(data, dict) else data
+                    logger.info(f"🎉 SUCCÈS avec {table_id} ! {len(records)} enregistrements trouvés")
+                    return table_id, data
+                else:
+                    logger.warning(f"❌ {table_id}: {response.text[:100]}")
+                    
+            except Exception as e:
+                logger.error(f"💥 Erreur test {table_id}: {e}")
+    
+    return None, None
+
 async def load_nocodb_states():
-    """Charge les états depuis NocoDB avec Base ID explicite"""
+    """Charge les états depuis NocoDB avec test des IDs"""
     global flowme_states
     
-    logger.info("🔍 === CHARGEMENT NOCODB AVEC BASE ID ===")
+    logger.info("🔍 === TEST MULTIPLE TABLE IDS ===")
     logger.info(f"🔧 URL NocoDB: {NOCODB_URL}")
-    logger.info(f"🔧 Base ID: {NOCODB_BASE_ID}")
     logger.info(f"🔧 API Key: {NOCODB_API_KEY[:10]}...{NOCODB_API_KEY[-10:] if NOCODB_API_KEY else 'MANQUANTE'}")
-    logger.info(f"🔧 States Table ID: {NOCODB_STATES_TABLE_ID}")
     
-    if not NOCODB_API_KEY or not NOCODB_STATES_TABLE_ID:
-        logger.warning("⚠️ Configuration NocoDB manquante, utilisation états par défaut")
+    if not NOCODB_API_KEY:
+        logger.warning("⚠️ API Key manquante, utilisation états par défaut")
         flowme_states = FlowMeStatesDetection(DEFAULT_STATES)
         return
     
-    try:
-        headers = {
-            "accept": "application/json",
-            "xc-token": NOCODB_API_KEY
-        }
+    # Test des différents Table IDs
+    working_id, data = await test_multiple_table_ids()
+    
+    if working_id and data:
+        logger.info(f"🎯 Table ID fonctionnel trouvé: {working_id}")
         
-        # Utilisation de l'API v2 avec Base ID explicite
-        url = f"{NOCODB_URL}/api/v2/bases/{NOCODB_BASE_ID}/tables/{NOCODB_STATES_TABLE_ID}/records"
-        logger.info(f"🎯 URL avec Base ID: {url}")
+        # Traitement des données
+        states_dict = {}
+        records = data.get("list", []) if isinstance(data, dict) else data
         
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.get(url, headers=headers)
+        logger.info(f"📋 Nombre d'enregistrements: {len(records)}")
+        
+        # Log du premier enregistrement pour comprendre la structure
+        if records:
+            logger.info(f"📝 Premier enregistrement: {records[0]}")
+        
+        for record in records:
+            if isinstance(record, dict):
+                # Recherche du nom de l'état dans différents champs possibles
+                name = (record.get("etat_nom") or 
+                       record.get("État") or 
+                       record.get("Nom") or 
+                       record.get("Name") or 
+                       record.get("titre") or
+                       record.get("Title"))
+                
+                if name:
+                    states_dict[name] = {
+                        "description": (record.get("tension_dominante") or
+                                      record.get("Description") or 
+                                      record.get("description") or ""),
+                        "color": (record.get("Couleur") or 
+                                 record.get("couleur") or 
+                                 record.get("Color") or "#808080"),
+                        "emoji": (record.get("Emoji") or 
+                                 record.get("emoji") or "😐")
+                    }
+        
+        if states_dict:
+            flowme_states = FlowMeStatesDetection(states_dict)
+            logger.info(f"🎉 {len(states_dict)} états FlowMe chargés avec Table ID: {working_id}")
+            logger.info(f"📋 Premiers états: {list(states_dict.keys())[:5]}")
             
-            logger.info(f"📡 Status Code: {response.status_code}")
-            
-            if response.status_code == 200:
-                data = response.json()
-                logger.info(f"🎉 Succès! Type de données: {type(data)}")
-                
-                # Traitement des données NocoDB v2
-                states_dict = {}
-                records = data.get("list", []) if isinstance(data, dict) else data
-                
-                logger.info(f"📋 Nombre d'enregistrements trouvés: {len(records)}")
-                
-                # Log du premier enregistrement pour comprendre la structure
-                if records:
-                    logger.info(f"📝 Premier enregistrement: {records[0]}")
-                
-                for record in records:
-                    if isinstance(record, dict):
-                        # Recherche du nom de l'état dans différents champs possibles
-                        name = (record.get("etat_nom") or 
-                               record.get("État") or 
-                               record.get("Nom") or 
-                               record.get("Name") or 
-                               record.get("titre") or
-                               record.get("Title"))
-                        
-                        if name:
-                            states_dict[name] = {
-                                "description": (record.get("tension_dominante") or
-                                              record.get("Description") or 
-                                              record.get("description") or ""),
-                                "color": (record.get("Couleur") or 
-                                         record.get("couleur") or 
-                                         record.get("Color") or "#808080"),
-                                "emoji": (record.get("Emoji") or 
-                                         record.get("emoji") or "😐")
-                            }
-                
-                if states_dict:
-                    flowme_states = FlowMeStatesDetection(states_dict)
-                    logger.info(f"🎉 {len(states_dict)} états FlowMe chargés depuis NocoDB avec Base ID")
-                    logger.info(f"📋 Premiers états: {list(states_dict.keys())[:5]}")
-                else:
-                    logger.warning("⚠️ Aucun état valide trouvé dans les données NocoDB")
-                    flowme_states = FlowMeStatesDetection(DEFAULT_STATES)
-                    
-            else:
-                logger.error(f"❌ Échec chargement NocoDB (HTTP {response.status_code})")
-                logger.error(f"❌ Réponse: {response.text}")
-                flowme_states = FlowMeStatesDetection(DEFAULT_STATES)
-                
-    except Exception as e:
-        logger.error(f"💥 Erreur connexion NocoDB: {e}")
+            # Sauvegarde du bon Table ID pour référence future
+            global NOCODB_STATES_TABLE_ID
+            NOCODB_STATES_TABLE_ID = working_id
+        else:
+            logger.warning("⚠️ Aucun état valide trouvé dans les données")
+            flowme_states = FlowMeStatesDetection(DEFAULT_STATES)
+    else:
+        logger.error("❌ Aucun Table ID fonctionnel trouvé")
+        logger.error("💡 Vérifiez votre Table ID dans NocoDB > Details > API Snippets")
         flowme_states = FlowMeStatesDetection(DEFAULT_STATES)
 
 async def save_to_nocodb(user_message: str, ai_response: str, detected_state: str, user_id: str = "anonymous"):
-    """Sauvegarde l'interaction dans NocoDB v2 avec Base ID"""
+    """Sauvegarde l'interaction dans NocoDB v2"""
     if not NOCODB_API_KEY or not NOCODB_REACTIONS_TABLE_ID:
         return False
     
@@ -166,8 +189,8 @@ async def save_to_nocodb(user_message: str, ai_response: str, detected_state: st
             "xc-token": NOCODB_API_KEY
         }
         
-        # Utilisation de l'API v2 avec Base ID explicite
-        url = f"{NOCODB_URL}/api/v2/bases/{NOCODB_BASE_ID}/tables/{NOCODB_REACTIONS_TABLE_ID}/records"
+        # Utilisation du format simple qui fonctionne
+        url = f"{NOCODB_URL}/api/v2/tables/{NOCODB_REACTIONS_TABLE_ID}/records"
         
         payload = {
             "User_Message": user_message[:500],
@@ -257,8 +280,7 @@ async def startup_event():
     logger.info("🚀 Démarrage de FlowMe v3")
     logger.info(f"✅ Mistral API: {'✓ Configuré' if MISTRAL_API_KEY else '✗ Manquant'}")
     logger.info(f"✅ NocoDB: {'✓ Configuré' if NOCODB_API_KEY else '✗ Manquant'}")
-    logger.info(f"🔧 Base ID: {NOCODB_BASE_ID}")
-    logger.info(f"🔧 States Table ID: {NOCODB_STATES_TABLE_ID}")
+    logger.info(f"🔧 States Table ID utilisé: {NOCODB_STATES_TABLE_ID}")
     logger.info(f"🔧 Reactions Table ID: {NOCODB_REACTIONS_TABLE_ID}")
     logger.info(f"📊 États disponibles: {len(flowme_states.states) if flowme_states else 0}")
 
@@ -325,6 +347,16 @@ async def home():
                 color: #666;
                 font-size: 1.2em;
                 margin-bottom: 30px;
+            }}
+            
+            .debug-info {{
+                background: #f8f9fa;
+                border: 1px solid #e9ecef;
+                border-radius: 8px;
+                padding: 15px;
+                margin-bottom: 20px;
+                font-family: monospace;
+                font-size: 0.9em;
             }}
             
             .chat-container {{
@@ -488,25 +520,33 @@ async def home():
             <div class="header">
                 <div class="logo">🌊💙</div>
                 <h1>FlowMe v3</h1>
-                <p class="subtitle">Votre compagnon IA pour un bien-être émotionnel optimal</p>
+                <p class="subtitle">Test automatique des Table IDs</p>
+            </div>
+            
+            <div class="debug-info">
+                <strong>🔍 Instructions:</strong><br>
+                1. Consultez les logs pour voir quel Table ID fonctionne<br>
+                2. Si aucun ne fonctionne, allez dans NocoDB > Details > API Snippets<br>
+                3. Copiez le vrai Table ID et mettez à jour NOCODB_STATES_TABLE_ID<br>
+                États chargés: {len(flowme_states.states) if flowme_states else 0}
             </div>
             
             <div class="chat-container" id="chatContainer">
                 <div class="ai-message">
-                    <strong>FlowMe:</strong> Bonjour ! Je suis FlowMe, votre compagnon IA empathique. 
-                    Comment vous sentez-vous aujourd'hui ? Partagez vos émotions avec moi, je suis là pour vous écouter et vous accompagner. 💙
+                    <strong>FlowMe:</strong> Version de test automatique ! Je teste plusieurs Table IDs pour trouver le bon. 
+                    Consultez les logs pour voir les résultats. États disponibles: {len(flowme_states.states) if flowme_states else len(DEFAULT_STATES)}
                 </div>
             </div>
             
             <div class="typing" id="typing">FlowMe réfléchit...</div>
             
             <div class="input-container">
-                <input type="text" id="userInput" placeholder="Exprimez vos émotions ici..." maxlength="500">
-                <button id="sendButton" onclick="sendMessage()">Envoyer</button>
+                <input type="text" id="userInput" placeholder="Testez une émotion..." maxlength="500">
+                <button id="sendButton" onclick="sendMessage()">Test</button>
             </div>
             
             <div class="stats">
-                <p><strong>📊 États émotionnels disponibles:</strong> {len(flowme_states.states) if flowme_states else len(DEFAULT_STATES)}</p>
+                <p><strong>📊 États émotionnels:</strong> {len(flowme_states.states) if flowme_states else len(DEFAULT_STATES)} (Mode: {'NocoDB' if len(flowme_states.states if flowme_states else []) > 10 else 'Défaut'})</p>
             </div>
             
             <div class="states-grid" id="statesGrid">
@@ -514,7 +554,7 @@ async def home():
             </div>
         </div>
         
-        <div class="version">FlowMe v3.0</div>
+        <div class="version">FlowMe v3.0 - Auto Test</div>
         
         <script>
             const states = {states_json};
@@ -573,11 +613,11 @@ async def home():
                     if (data.response) {{
                         addMessage(data.response, 'ai', data.detected_state);
                     }} else {{
-                        addMessage('Désolé, une erreur est survenue. Pouvez-vous réessayer ?', 'ai');
+                        addMessage('Erreur de traitement. Consultez les logs serveur.', 'ai');
                     }}
                 }} catch (error) {{
                     console.error('Erreur:', error);
-                    addMessage('Erreur de connexion. Vérifiez votre connexion internet.', 'ai');
+                    addMessage('Erreur de connexion.', 'ai');
                 }} finally {{
                     isProcessing = false;
                     document.getElementById('sendButton').disabled = false;
@@ -656,7 +696,7 @@ async def chat_endpoint(chat_message: ChatMessage):
     except Exception as e:
         logger.error(f"Erreur chat endpoint: {e}")
         return JSONResponse({
-            "response": "Je rencontre une difficulté technique. Pouvez-vous réessayer ?",
+            "response": "Je rencontre une difficulté technique. Consultez les logs pour plus de détails.",
             "detected_state": "Présence",
             "error": str(e)
         }, status_code=500)
@@ -666,13 +706,32 @@ async def health_check():
     """Vérification de santé du service"""
     return JSONResponse({
         "status": "healthy",
-        "version": "3.0.0",
+        "version": "3.0.0-autotest",
         "states_loaded": len(flowme_states.states) if flowme_states else 0,
         "mistral_configured": bool(MISTRAL_API_KEY),
         "nocodb_configured": bool(NOCODB_API_KEY),
-        "base_id": NOCODB_BASE_ID,
+        "table_id_used": NOCODB_STATES_TABLE_ID,
         "timestamp": datetime.now().isoformat()
     })
+
+@app.get("/debug/table-ids")
+async def debug_table_ids():
+    """Test manuel des différents Table IDs"""
+    working_id, data = await test_multiple_table_ids()
+    
+    if working_id:
+        return JSONResponse({
+            "success": True,
+            "working_table_id": working_id,
+            "records_count": len(data.get("list", []) if isinstance(data, dict) else data),
+            "message": f"Table ID fonctionnel trouvé: {working_id}"
+        })
+    else:
+        return JSONResponse({
+            "success": False,
+            "message": "Aucun Table ID fonctionnel trouvé. Vérifiez vos API Snippets dans NocoDB.",
+            "suggestion": "Allez dans NocoDB > flowmeAI > Details > API Snippets pour obtenir la bonne URL"
+        })
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
