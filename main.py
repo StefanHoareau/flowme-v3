@@ -20,7 +20,7 @@ app = FastAPI(title="FlowMe v3", version="3.0.0")
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 NOCODB_URL = os.getenv("NOCODB_URL", "https://app.nocodb.com")
 NOCODB_API_KEY = os.getenv("NOCODB_API_KEY")
-NOCODB_STATES_TABLE_ID = os.getenv("NOCODB_STATES_TABLE_ID", "mpcze1f1cb4x64x")  # ID correct confirmé
+NOCODB_STATES_TABLE_ID = os.getenv("NOCODB_STATES_TABLE_ID", "mpcze1f1cb4x64x")
 NOCODB_REACTIONS_TABLE_ID = os.getenv("NOCODB_REACTIONS_TABLE_ID", "m8lwhj640ohzg7m")
 
 # États par défaut (fallback si NocoDB ne répond pas)
@@ -70,9 +70,59 @@ class FlowMeStatesDetection:
 # Instance globale
 flowme_states = None
 
+async def test_nocodb_endpoints():
+    """Test de différents endpoints NocoDB pour diagnostic"""
+    if not NOCODB_API_KEY:
+        logger.error("🔴 NOCODB_API_KEY manquante")
+        return
+    
+    headers = {
+        "accept": "application/json",
+        "xc-token": NOCODB_API_KEY
+    }
+    
+    test_urls = [
+        f"{NOCODB_URL}/api/v2/tables/{NOCODB_STATES_TABLE_ID}/records",
+        f"{NOCODB_URL}/api/v2/tables/{NOCODB_REACTIONS_TABLE_ID}/records",
+        f"{NOCODB_URL}/api/v1/db/data/noco/{NOCODB_STATES_TABLE_ID}",
+        f"{NOCODB_URL}/api/v2/meta/tables/{NOCODB_STATES_TABLE_ID}",
+    ]
+    
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for i, url in enumerate(test_urls):
+            try:
+                logger.info(f"🧪 Test {i+1}: {url}")
+                response = await client.get(url, headers=headers)
+                logger.info(f"📊 Réponse {i+1}: HTTP {response.status_code}")
+                
+                if response.status_code == 200:
+                    try:
+                        data = response.json()
+                        logger.info(f"✅ Données reçues: {len(str(data))} caractères")
+                        if isinstance(data, dict) and "list" in data:
+                            logger.info(f"📋 Nombre d'enregistrements: {len(data.get('list', []))}")
+                        elif isinstance(data, list):
+                            logger.info(f"📋 Nombre d'enregistrements: {len(data)}")
+                    except:
+                        logger.info(f"📄 Réponse texte: {response.text[:200]}...")
+                else:
+                    logger.warning(f"❌ Erreur {response.status_code}: {response.text[:200]}")
+                    
+            except Exception as e:
+                logger.error(f"💥 Exception test {i+1}: {e}")
+
 async def load_nocodb_states():
-    """Charge les états depuis NocoDB v2"""
+    """Charge les états depuis NocoDB v2 avec diagnostic complet"""
     global flowme_states
+    
+    logger.info("🔍 === DIAGNOSTIC NOCODB COMPLET ===")
+    logger.info(f"🔧 URL NocoDB: {NOCODB_URL}")
+    logger.info(f"🔧 API Key: {NOCODB_API_KEY[:10]}...{NOCODB_API_KEY[-10:] if NOCODB_API_KEY else 'MANQUANTE'}")
+    logger.info(f"🔧 States Table ID: {NOCODB_STATES_TABLE_ID}")
+    logger.info(f"🔧 Reactions Table ID: {NOCODB_REACTIONS_TABLE_ID}")
+    
+    # Test des endpoints
+    await test_nocodb_endpoints()
     
     if not NOCODB_API_KEY or not NOCODB_STATES_TABLE_ID:
         logger.warning("⚠️ Configuration NocoDB manquante, utilisation états par défaut")
@@ -85,41 +135,68 @@ async def load_nocodb_states():
             "xc-token": NOCODB_API_KEY
         }
         
-        # Utilisation de l'API v2 NocoDB
+        # Essai principal avec l'API v2
         url = f"{NOCODB_URL}/api/v2/tables/{NOCODB_STATES_TABLE_ID}/records"
+        logger.info(f"🎯 Tentative principale: {url}")
         
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.get(url, headers=headers)
+            
+            logger.info(f"📡 Status Code: {response.status_code}")
+            logger.info(f"📡 Headers: {dict(response.headers)}")
+            logger.info(f"📡 Response Text: {response.text[:500]}...")
             
             if response.status_code == 200:
                 data = response.json()
+                logger.info(f"🎉 Succès! Type de données: {type(data)}")
                 
                 # Traitement des données NocoDB v2
                 states_dict = {}
                 records = data.get("list", []) if isinstance(data, dict) else data
                 
+                logger.info(f"📋 Nombre d'enregistrements trouvés: {len(records)}")
+                
+                for i, record in enumerate(records[:3]):  # Log des 3 premiers pour debug
+                    logger.info(f"📝 Enregistrement {i+1}: {record}")
+                
                 for record in records:
                     if isinstance(record, dict):
-                        name = record.get("État") or record.get("Nom") or record.get("Name")
+                        # Essai de différents noms de colonnes
+                        name = (record.get("État") or 
+                               record.get("Nom") or 
+                               record.get("Name") or 
+                               record.get("etat_nom") or
+                               record.get("titre") or
+                               record.get("Title"))
+                        
                         if name:
                             states_dict[name] = {
-                                "description": record.get("Description", ""),
-                                "color": record.get("Couleur", "#808080"),
-                                "emoji": record.get("Emoji", "😐")
+                                "description": (record.get("Description") or 
+                                              record.get("description") or ""),
+                                "color": (record.get("Couleur") or 
+                                         record.get("couleur") or 
+                                         record.get("Color") or "#808080"),
+                                "emoji": (record.get("Emoji") or 
+                                         record.get("emoji") or "😐")
                             }
                 
                 if states_dict:
                     flowme_states = FlowMeStatesDetection(states_dict)
-                    logger.info(f"✅ {len(states_dict)} états FlowMe chargés depuis NocoDB v2")
+                    logger.info(f"🎉 {len(states_dict)} états FlowMe chargés depuis NocoDB v2")
+                    logger.info(f"📋 États chargés: {list(states_dict.keys())[:5]}")
                 else:
-                    raise ValueError("Aucun état valide trouvé dans NocoDB")
+                    logger.warning("⚠️ Aucun état valide trouvé dans les données NocoDB")
+                    flowme_states = FlowMeStatesDetection(DEFAULT_STATES)
                     
             else:
-                logger.warning(f"❌ Échec chargement NocoDB (HTTP {response.status_code}), utilisation états par défaut")
+                logger.error(f"❌ Échec chargement NocoDB (HTTP {response.status_code})")
+                logger.error(f"❌ Réponse complète: {response.text}")
                 flowme_states = FlowMeStatesDetection(DEFAULT_STATES)
                 
     except Exception as e:
-        logger.warning(f"❌ Erreur connexion NocoDB: {e}, utilisation états par défaut")
+        logger.error(f"💥 Erreur connexion NocoDB: {e}")
+        import traceback
+        logger.error(f"💥 Traceback: {traceback.format_exc()}")
         flowme_states = FlowMeStatesDetection(DEFAULT_STATES)
 
 async def save_to_nocodb(user_message: str, ai_response: str, detected_state: str, user_id: str = "anonymous"):
@@ -134,11 +211,10 @@ async def save_to_nocodb(user_message: str, ai_response: str, detected_state: st
             "xc-token": NOCODB_API_KEY
         }
         
-        # Utilisation de l'API v2 NocoDB
         url = f"{NOCODB_URL}/api/v2/tables/{NOCODB_REACTIONS_TABLE_ID}/records"
         
         payload = {
-            "User_Message": user_message[:500],  # Limite de caractères
+            "User_Message": user_message[:500],
             "AI_Response": ai_response[:1000],
             "Detected_State": detected_state,
             "User_ID": user_id,
@@ -292,6 +368,16 @@ async def home():
                 color: #666;
                 font-size: 1.2em;
                 margin-bottom: 30px;
+            }}
+            
+            .debug-info {{
+                background: #f8f9fa;
+                border: 1px solid #e9ecef;
+                border-radius: 8px;
+                padding: 15px;
+                margin-bottom: 20px;
+                font-family: monospace;
+                font-size: 0.9em;
             }}
             
             .chat-container {{
@@ -454,26 +540,34 @@ async def home():
         <div class="container">
             <div class="header">
                 <div class="logo">🌊💙</div>
-                <h1>FlowMe v3</h1>
-                <p class="subtitle">Votre compagnon IA pour un bien-être émotionnel optimal</p>
+                <h1>FlowMe v3 - Debug</h1>
+                <p class="subtitle">Diagnostic complet de la connexion NocoDB</p>
+            </div>
+            
+            <div class="debug-info">
+                <strong>🔍 Informations de Debug:</strong><br>
+                API Key: {NOCODB_API_KEY[:10] if NOCODB_API_KEY else 'MANQUANTE'}...{NOCODB_API_KEY[-10:] if NOCODB_API_KEY else ''}<br>
+                States Table ID: {NOCODB_STATES_TABLE_ID}<br>
+                États chargés: {len(flowme_states.states) if flowme_states else 0}<br>
+                URL Test: {NOCODB_URL}/api/v2/tables/{NOCODB_STATES_TABLE_ID}/records
             </div>
             
             <div class="chat-container" id="chatContainer">
                 <div class="ai-message">
-                    <strong>FlowMe:</strong> Bonjour ! Je suis FlowMe, votre compagnon IA empathique. 
-                    Comment vous sentez-vous aujourd'hui ? Partagez vos émotions avec moi, je suis là pour vous écouter et vous accompagner. 💙
+                    <strong>FlowMe:</strong> Version DEBUG active ! Consultez les logs pour voir les détails de connexion NocoDB. 
+                    Les états disponibles: {len(flowme_states.states) if flowme_states else len(DEFAULT_STATES)}
                 </div>
             </div>
             
             <div class="typing" id="typing">FlowMe réfléchit...</div>
             
             <div class="input-container">
-                <input type="text" id="userInput" placeholder="Exprimez vos émotions ici..." maxlength="500">
-                <button id="sendButton" onclick="sendMessage()">Envoyer</button>
+                <input type="text" id="userInput" placeholder="Testez une émotion..." maxlength="500">
+                <button id="sendButton" onclick="sendMessage()">Test</button>
             </div>
             
             <div class="stats">
-                <p><strong>📊 États émotionnels disponibles:</strong> {len(flowme_states.states) if flowme_states else len(DEFAULT_STATES)}</p>
+                <p><strong>📊 États émotionnels:</strong> {len(flowme_states.states) if flowme_states else len(DEFAULT_STATES)} (Mode: {'NocoDB' if len(flowme_states.states if flowme_states else []) > 10 else 'Défaut'})</p>
             </div>
             
             <div class="states-grid" id="statesGrid">
@@ -481,7 +575,7 @@ async def home():
             </div>
         </div>
         
-        <div class="version">FlowMe v3.0</div>
+        <div class="version">FlowMe v3.0 - DEBUG</div>
         
         <script>
             const states = {states_json};
@@ -540,11 +634,11 @@ async def home():
                     if (data.response) {{
                         addMessage(data.response, 'ai', data.detected_state);
                     }} else {{
-                        addMessage('Désolé, une erreur est survenue. Pouvez-vous réessayer ?', 'ai');
+                        addMessage('Erreur de traitement. Consultez les logs serveur.', 'ai');
                     }}
                 }} catch (error) {{
                     console.error('Erreur:', error);
-                    addMessage('Erreur de connexion. Vérifiez votre connexion internet.', 'ai');
+                    addMessage('Erreur de connexion.', 'ai');
                 }} finally {{
                     isProcessing = false;
                     document.getElementById('sendButton').disabled = false;
@@ -623,7 +717,7 @@ async def chat_endpoint(chat_message: ChatMessage):
     except Exception as e:
         logger.error(f"Erreur chat endpoint: {e}")
         return JSONResponse({
-            "response": "Je rencontre une difficulté technique. Pouvez-vous réessayer ?",
+            "response": "Je rencontre une difficulté technique. Consultez les logs pour plus de détails.",
             "detected_state": "Présence",
             "error": str(e)
         }, status_code=500)
@@ -633,10 +727,26 @@ async def health_check():
     """Vérification de santé du service"""
     return JSONResponse({
         "status": "healthy",
-        "version": "3.0.0",
+        "version": "3.0.0-debug",
         "states_loaded": len(flowme_states.states) if flowme_states else 0,
         "mistral_configured": bool(MISTRAL_API_KEY),
         "nocodb_configured": bool(NOCODB_API_KEY),
+        "debug_info": {
+            "nocodb_url": NOCODB_URL,
+            "states_table_id": NOCODB_STATES_TABLE_ID,
+            "reactions_table_id": NOCODB_REACTIONS_TABLE_ID,
+            "api_key_present": bool(NOCODB_API_KEY),
+            "api_key_preview": f"{NOCODB_API_KEY[:10]}...{NOCODB_API_KEY[-5:]}" if NOCODB_API_KEY else "MISSING"
+        },
+        "timestamp": datetime.now().isoformat()
+    })
+
+@app.get("/debug/nocodb")
+async def debug_nocodb():
+    """Endpoint de debug spécifique pour NocoDB"""
+    await test_nocodb_endpoints()
+    return JSONResponse({
+        "message": "Tests NocoDB terminés. Consultez les logs pour les résultats détaillés.",
         "timestamp": datetime.now().isoformat()
     })
 
