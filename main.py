@@ -42,17 +42,20 @@ class FlowMeStateDetector:
         try:
             if self.nocodb_api_key and self.states_table_id:
                 headers = {"xc-token": self.nocodb_api_key}
+                # Nouvelle API v2 NocoDB
                 response = await self.mistral_client.get(
-                    f"{self.nocodb_url}/api/v1/db/data/noco/{self.states_table_id}", 
+                    f"{self.nocodb_url}/api/v2/tables/{self.states_table_id}/records", 
                     headers=headers
                 )
                 
                 if response.status_code == 200:
                     states_data = response.json()
+                    # Structure API v2 : les données sont dans "list" ou directement dans la réponse
+                    records = states_data.get("list", states_data) if isinstance(states_data, dict) else states_data
                     self.flowme_states = {
-                        state["ID_État"]: state for state in states_data.get("list", [])
+                        state["ID_État"]: state for state in records if isinstance(state, dict) and "ID_État" in state
                     }
-                    logger.info(f"✅ {len(self.flowme_states)} états FlowMe chargés depuis NocoDB")
+                    logger.info(f"✅ {len(self.flowme_states)} états FlowMe chargés depuis NocoDB v2")
                 else:
                     logger.warning(f"❌ Échec chargement NocoDB (HTTP {response.status_code}), utilisation états par défaut")
                     self._load_default_states()
@@ -317,14 +320,15 @@ class FlowMeStateDetector:
                 "recommandations": response
             }
             
+            # Nouvelle API v2 NocoDB
             response_save = await self.mistral_client.post(
-                f"{self.nocodb_url}/api/v1/db/data/noco/{self.reactions_table_id}",
+                f"{self.nocodb_url}/api/v2/tables/{self.reactions_table_id}/records",
                 headers=headers,
                 json=data
             )
             
-            if response_save.status_code == 200:
-                logger.info("✅ Interaction sauvegardée dans NocoDB")
+            if response_save.status_code in [200, 201]:
+                logger.info("✅ Interaction sauvegardée dans NocoDB v2")
             else:
                 logger.warning(f"❌ Échec sauvegarde NocoDB: {response_save.status_code}")
                 
