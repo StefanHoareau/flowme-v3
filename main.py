@@ -2,16 +2,143 @@ import os
 import json
 import httpx
 import logging
+import time
+import psutil  # Pour les métriques système
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from typing import Dict, Any, Optional
 import uvicorn
-from datetime import datetime
+from datetime import datetime, timedelta
+from collections import defaultdict, Counter
+from dataclasses import dataclass, asdict
 
 # Configuration du logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ========== SYSTÈME DE MONITORING ==========
+@dataclass
+class ConversationMetrics:
+    session_id: str
+    user_id: str
+    start_time: datetime
+    end_time: Optional[datetime]
+    message_count: int
+    emotions_detected: list
+    average_response_time: float
+    user_satisfaction: Optional[int]
+
+@dataclass
+class SystemHealthMetrics:
+    timestamp: datetime
+    nocodb_status: bool
+    mistral_status: bool
+    response_times: Dict[str, float]
+    error_count: int
+    active_sessions: int
+    memory_usage: float
+    cpu_usage: float
+
+class FlowMeAnalytics:
+    def __init__(self):
+        self.conversations: Dict[str, ConversationMetrics] = {}
+        self.health_history = []
+        self.emotion_stats = Counter()
+        self.error_log = []
+        self.system_start_time = datetime.now()
+        
+    def start_conversation(self, session_id: str, user_id: str = "anonymous"):
+        self.conversations[session_id] = ConversationMetrics(
+            session_id=session_id,
+            user_id=user_id,
+            start_time=datetime.now(),
+            end_time=None,
+            message_count=0,
+            emotions_detected=[],
+            average_response_time=0.0,
+            user_satisfaction=None
+        )
+        
+    def log_message(self, session_id: str, emotion: str, response_time: float):
+        if session_id in self.conversations:
+            conv = self.conversations[session_id]
+            conv.message_count += 1
+            conv.emotions_detected.append(emotion)
+            
+            current_avg = conv.average_response_time
+            conv.average_response_time = (current_avg * (conv.message_count - 1) + response_time) / conv.message_count
+            
+            self.emotion_stats[emotion] += 1
+    
+    def log_system_health(self, nocodb_status: bool, mistral_status: bool, 
+                         response_times: Dict[str, float], error_count: int):
+        try:
+            memory_usage = psutil.virtual_memory().percent
+            cpu_usage = psutil.cpu_percent()
+        except:
+            memory_usage = 0.0
+            cpu_usage = 0.0
+            
+        health = SystemHealthMetrics(
+            timestamp=datetime.now(),
+            nocodb_status=nocodb_status,
+            mistral_status=mistral_status,
+            response_times=response_times,
+            error_count=error_count,
+            active_sessions=len([c for c in self.conversations.values() if c.end_time is None]),
+            memory_usage=memory_usage,
+            cpu_usage=cpu_usage
+        )
+        
+        self.health_history.append(health)
+        
+        # Garder seulement les 24 dernières heures
+        cutoff = datetime.now() - timedelta(hours=24)
+        self.health_history = [h for h in self.health_history if h.timestamp > cutoff]
+    
+    def log_error(self, error_type: str, error_message: str, session_id: str = None):
+        self.error_log.append({
+            'timestamp': datetime.now(),
+            'type': error_type,
+            'message': error_message,
+            'session_id': session_id
+        })
+        
+        if len(self.error_log) > 100:
+            self.error_log = self.error_log[-100:]
+    
+    def get_analytics_summary(self) -> Dict[str, Any]:
+        now = datetime.now()
+        uptime = (now - self.system_start_time).total_seconds()
+        
+        # Calculer l'uptime système
+        system_uptime = 100.0
+        if self.health_history:
+            total_checks = len(self.health_history)
+            successful = sum(1 for h in self.health_history if h.nocodb_status and h.mistral_status)
+            system_uptime = (successful / total_checks) * 100 if total_checks > 0 else 100.0
+        
+        # Temps de réponse moyen
+        avg_response_time = 0.0
+        if self.conversations:
+            response_times = [c.average_response_time for c in self.conversations.values() if c.average_response_time > 0]
+            avg_response_time = sum(response_times) / len(response_times) if response_times else 0.0
+        
+        return {
+            "uptime_seconds": uptime,
+            "total_conversations": len(self.conversations),
+            "active_conversations": len([c for c in self.conversations.values() if c.end_time is None]),
+            "total_messages": sum(c.message_count for c in self.conversations.values()),
+            "system_uptime_percent": round(system_uptime, 2),
+            "average_response_time": round(avg_response_time, 2),
+            "top_emotions": dict(self.emotion_stats.most_common(5)),
+            "recent_errors": len([e for e in self.error_log if e['timestamp'] > now - timedelta(hours=1)]),
+            "memory_usage": self.health_history[-1].memory_usage if self.health_history else 0,
+            "cpu_usage": self.health_history[-1].cpu_usage if self.health_history else 0
+        }
+
+# ========== APPLICATION PRINCIPALE ==========
 
 app = FastAPI(title="FlowMe v3", version="3.0.0")
 
@@ -68,13 +195,18 @@ class FlowMeStatesDetection:
                 return emotion
         return "Présence"
 
-# Instance globale
+# Instances globales
 flowme_states = None
+analytics = FlowMeAnalytics()
+
+# Ajout de l'analytics à l'app state
+app.state.analytics = analytics
 
 async def load_nocodb_states():
     global flowme_states
     
     logger.info("🔍 Chargement des états FlowMe...")
+    nocodb_status = False
     
     if NOCODB_API_KEY and NOCODB_STATES_TABLE_ID:
         try:
@@ -102,16 +234,19 @@ async def load_nocodb_states():
                         
                         if nocodb_states:
                             flowme_states = FlowMeStatesDetection(nocodb_states, "NocoDB")
+                            nocodb_status = True
                             logger.info(f"✅ {len(nocodb_states)} états chargés depuis NocoDB")
-                            return
+                            return nocodb_status
                 
                 logger.warning("⚠️ NocoDB non disponible")
         except Exception as e:
             logger.warning(f"⚠️ Erreur NocoDB: {e}")
+            analytics.log_error("nocodb_connection", str(e))
     
     # Fallback local
     flowme_states = FlowMeStatesDetection(LOCAL_FALLBACK_STATES, "Local")
     logger.info("🏠 États locaux chargés")
+    return nocodb_status
 
 async def save_to_nocodb(user_message: str, ai_response: str, detected_state: str, user_id: str):
     if not NOCODB_API_KEY:
@@ -136,18 +271,21 @@ async def save_to_nocodb(user_message: str, ai_response: str, detected_state: st
         async with httpx.AsyncClient(timeout=8.0) as client:
             response = await client.post(url, headers=headers, json=payload)
             return response.status_code in [200, 201]
-    except:
+    except Exception as e:
+        analytics.log_error("nocodb_save", str(e))
         return False
 
-async def generate_mistral_response(message: str, detected_state: str) -> str:
+async def generate_mistral_response(message: str, detected_state: str) -> tuple[str, bool]:
+    mistral_status = False
+    
     if not MISTRAL_API_KEY:
-        return f"Je comprends que vous ressentez de la {detected_state.lower()}. Comment puis-je vous accompagner ?"
+        return f"Je comprends que vous ressentez de la {detected_state.lower()}. Comment puis-je vous accompagner ?", mistral_status
     
     try:
         state_info = flowme_states.states.get(detected_state, {})
         state_description = state_info.get("description", detected_state)
         
-        system_prompt = f"""Tu es FlowMe, un compagnon IA empathique.
+        system_prompt = f"""Tu es FlowMe, un compagnion IA empathique.
 
 L'utilisateur ressent: {detected_state} ({state_description})
 
@@ -177,19 +315,30 @@ Réponds de manière empathique, bienveillante et encourageante en français (ma
             
             if response.status_code == 200:
                 result = response.json()
-                return result["choices"][0]["message"]["content"].strip()
-    except:
-        pass
+                mistral_status = True
+                return result["choices"][0]["message"]["content"].strip(), mistral_status
+    except Exception as e:
+        analytics.log_error("mistral_api", str(e))
     
-    return f"Je comprends votre état de {detected_state.lower()}. Parlons de ce qui vous préoccupe."
+    return f"Je comprends votre état de {detected_state.lower()}. Parlons de ce qui vous préoccupe.", mistral_status
 
 @app.on_event("startup")
 async def startup_event():
-    await load_nocodb_states()
-    logger.info("🚀 FlowMe v3 démarré")
+    nocodb_status = await load_nocodb_states()
+    
+    # Log de la santé initiale du système
+    analytics.log_system_health(
+        nocodb_status=nocodb_status,
+        mistral_status=bool(MISTRAL_API_KEY),
+        response_times={},
+        error_count=0
+    )
+    
+    logger.info("🚀 FlowMe v3 démarré avec monitoring")
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
+    # Votre HTML existant ici...
     return HTMLResponse("""
     <!DOCTYPE html>
     <html lang="fr">
@@ -283,27 +432,49 @@ async def home():
 
 @app.post("/chat")
 async def chat_endpoint(chat_message: ChatMessage):
+    start_time = time.time()
+    session_id = chat_message.user_id or "anonymous"
+    
     try:
         if not flowme_states:
             raise HTTPException(status_code=503, detail="Service non disponible")
         
+        # Démarrer la conversation si nouvelle
+        if session_id not in analytics.conversations:
+            analytics.start_conversation(session_id, chat_message.user_id)
+        
         clean_message = chat_message.message.strip()[:500]
-        user_id = chat_message.user_id[:50] if chat_message.user_id else "anonymous"
         
         detected_state = flowme_states.detect_emotion(clean_message)
-        ai_response = await generate_mistral_response(clean_message, detected_state)
+        ai_response, mistral_status = await generate_mistral_response(clean_message, detected_state)
+        
+        # Calculer le temps de réponse
+        response_time = time.time() - start_time
+        
+        # Log des métriques
+        analytics.log_message(session_id, detected_state, response_time)
+        
+        # Log de la santé système
+        analytics.log_system_health(
+            nocodb_status=flowme_states.source == "NocoDB",
+            mistral_status=mistral_status,
+            response_times={"chat": response_time},
+            error_count=0
+        )
         
         # Sauvegarde asynchrone
-        await save_to_nocodb(clean_message, ai_response, detected_state, user_id)
+        await save_to_nocodb(clean_message, ai_response, detected_state, session_id)
         
         return JSONResponse({
             "response": ai_response,
             "detected_state": detected_state,
             "source": flowme_states.source,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "response_time": round(response_time, 2)
         })
         
     except Exception as e:
+        analytics.log_error("chat_error", str(e), session_id)
         logger.error(f"Erreur chat: {e}")
         return JSONResponse({
             "response": "Je rencontre une difficulté technique. Pouvez-vous réessayer ?",
@@ -311,14 +482,63 @@ async def chat_endpoint(chat_message: ChatMessage):
             "error": "Service indisponible"
         }, status_code=500)
 
+# ========== NOUVEAUX ENDPOINTS MONITORING ==========
+
+@app.get("/analytics")
+async def get_analytics():
+    """Dashboard d'analytics complet"""
+    return JSONResponse(analytics.get_analytics_summary())
+
 @app.get("/health")
 async def health_check():
+    """Health check avec métriques système"""
+    summary = analytics.get_analytics_summary()
+    
     return JSONResponse({
         "status": "healthy",
         "version": "3.0.0",
         "states_count": len(flowme_states.states) if flowme_states else 0,
         "source": flowme_states.source if flowme_states else "none",
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
+        "uptime_seconds": summary["uptime_seconds"],
+        "system_uptime_percent": summary["system_uptime_percent"],
+        "active_conversations": summary["active_conversations"],
+        "memory_usage": summary["memory_usage"],
+        "cpu_usage": summary["cpu_usage"],
+        "average_response_time": summary["average_response_time"]
+    })
+
+@app.get("/analytics/emotions")
+async def emotion_analytics():
+    """Statistiques sur les émotions détectées"""
+    return JSONResponse({
+        "emotion_distribution": dict(analytics.emotion_stats),
+        "top_emotions": dict(analytics.emotion_stats.most_common(10)),
+        "total_emotions_detected": sum(analytics.emotion_stats.values())
+    })
+
+@app.get("/analytics/conversations")
+async def conversation_analytics():
+    """Statistiques sur les conversations"""
+    active_convs = [c for c in analytics.conversations.values() if c.end_time is None]
+    completed_convs = [c for c in analytics.conversations.values() if c.end_time is not None]
+    
+    avg_messages = sum(c.message_count for c in analytics.conversations.values()) / len(analytics.conversations) if analytics.conversations else 0
+    
+    return JSONResponse({
+        "total_conversations": len(analytics.conversations),
+        "active_conversations": len(active_convs),
+        "completed_conversations": len(completed_convs),
+        "average_messages_per_conversation": round(avg_messages, 2),
+        "recent_conversations": [
+            {
+                "session_id": c.session_id,
+                "start_time": c.start_time.isoformat(),
+                "message_count": c.message_count,
+                "emotions": c.emotions_detected[-3:] if c.emotions_detected else []
+            }
+            for c in sorted(analytics.conversations.values(), key=lambda x: x.start_time, reverse=True)[:10]
+        ]
     })
 
 if __name__ == "__main__":
