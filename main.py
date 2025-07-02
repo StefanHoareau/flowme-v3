@@ -770,6 +770,94 @@ async def home():
     </body>
     </html>
     """
+            }}
+            
+            // Envoi sécurisé de message
+            async function sendMessage() {{
+                if (isProcessing) return;
+                
+                const input = document.getElementById('userInput');
+                const message = input.value.trim();
+                
+                if (!message || message.length < 2) return;
+                
+                isProcessing = true;
+                document.getElementById('sendButton').disabled = true;
+                document.getElementById('typing').classList.add('show');
+                
+                // Affichage du message utilisateur
+                addMessage(message, 'user');
+                input.value = '';
+                
+                try {{
+                    const response = await fetch('/chat', {{
+                        method: 'POST',
+                        headers: {{
+                            'Content-Type': 'application/json; charset=utf-8'
+                        }},
+                        body: JSON.stringify({{ message: message }})
+                    }});
+                    
+                    if (response.ok) {{
+                        const data = await response.json();
+                        
+                        if (data.response) {{
+                            addMessage(data.response, 'ai', data.detected_state);
+                        }} else {{
+                            addMessage('Désolé, une erreur est survenue. Pouvez-vous réessayer ?', 'ai');
+                        }}
+                    }} else {{
+                        addMessage('Erreur de connexion. Vérifiez votre connexion internet.', 'ai');
+                    }}
+                }} catch (error) {{
+                    console.error('Erreur:', error);
+                    addMessage('Erreur de connexion. Veuillez réessayer.', 'ai');
+                }} finally {{
+                    isProcessing = false;
+                    document.getElementById('sendButton').disabled = false;
+                    document.getElementById('typing').classList.remove('show');
+                }}
+            }}
+            
+            // Ajout sécurisé de message dans le chat
+            function addMessage(text, sender, detectedState = null) {{
+                const container = document.getElementById('chatContainer');
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${{sender}}-message`;
+                
+                // Échappement XSS basique
+                const safeText = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                let content = `<strong>${{sender === 'user' ? 'Vous' : 'FlowMe'}}:</strong> ${{safeText}}`;
+                
+                if (detectedState && states[detectedState]) {{
+                    const stateInfo = states[detectedState];
+                    content += `<div class="state-indicator" style="background-color: ${{stateInfo.color}}">
+                        ${{stateInfo.emoji || '😐'}} État détecté: ${{detectedState}}
+                    </div>`;
+                }}
+                
+                messageDiv.innerHTML = content;
+                container.appendChild(messageDiv);
+                container.scrollTop = container.scrollHeight;
+            }}
+            
+            // Événements sécurisés
+            document.getElementById('userInput').addEventListener('keypress', function(e) {{
+                if (e.key === 'Enter' && !e.shiftKey) {{
+                    e.preventDefault();
+                    sendMessage();
+                }}
+            }});
+            
+            // Initialisation sécurisée
+            document.addEventListener('DOMContentLoaded', function() {{
+                generateStatesGrid();
+                document.getElementById('userInput').focus();
+            }});
+        </script>
+    </body>
+    </html>
+    """
     return HTMLResponse(content=html_content)
 
 @app.post("/chat")
