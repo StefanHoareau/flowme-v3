@@ -3,7 +3,6 @@ import json
 import httpx
 import logging
 import time
-import psutil  # Pour les métriques système
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
@@ -17,7 +16,7 @@ from dataclasses import dataclass, asdict
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ========== SYSTÈME DE MONITORING ==========
+# ========== SYSTÈME DE MONITORING SIMPLIFIÉ ==========
 @dataclass
 class ConversationMetrics:
     session_id: str
@@ -27,7 +26,6 @@ class ConversationMetrics:
     message_count: int
     emotions_detected: list
     average_response_time: float
-    user_satisfaction: Optional[int]
 
 @dataclass
 class SystemHealthMetrics:
@@ -37,8 +35,6 @@ class SystemHealthMetrics:
     response_times: Dict[str, float]
     error_count: int
     active_sessions: int
-    memory_usage: float
-    cpu_usage: float
 
 class FlowMeAnalytics:
     def __init__(self):
@@ -56,8 +52,7 @@ class FlowMeAnalytics:
             end_time=None,
             message_count=0,
             emotions_detected=[],
-            average_response_time=0.0,
-            user_satisfaction=None
+            average_response_time=0.0
         )
         
     def log_message(self, session_id: str, emotion: str, response_time: float):
@@ -73,22 +68,13 @@ class FlowMeAnalytics:
     
     def log_system_health(self, nocodb_status: bool, mistral_status: bool, 
                          response_times: Dict[str, float], error_count: int):
-        try:
-            memory_usage = psutil.virtual_memory().percent
-            cpu_usage = psutil.cpu_percent()
-        except:
-            memory_usage = 0.0
-            cpu_usage = 0.0
-            
         health = SystemHealthMetrics(
             timestamp=datetime.now(),
             nocodb_status=nocodb_status,
             mistral_status=mistral_status,
             response_times=response_times,
             error_count=error_count,
-            active_sessions=len([c for c in self.conversations.values() if c.end_time is None]),
-            memory_usage=memory_usage,
-            cpu_usage=cpu_usage
+            active_sessions=len([c for c in self.conversations.values() if c.end_time is None])
         )
         
         self.health_history.append(health)
@@ -133,9 +119,7 @@ class FlowMeAnalytics:
             "system_uptime_percent": round(system_uptime, 2),
             "average_response_time": round(avg_response_time, 2),
             "top_emotions": dict(self.emotion_stats.most_common(5)),
-            "recent_errors": len([e for e in self.error_log if e['timestamp'] > now - timedelta(hours=1)]),
-            "memory_usage": self.health_history[-1].memory_usage if self.health_history else 0,
-            "cpu_usage": self.health_history[-1].cpu_usage if self.health_history else 0
+            "recent_errors": len([e for e in self.error_log if e['timestamp'] > now - timedelta(hours=1)])
         }
 
 # ========== APPLICATION PRINCIPALE ==========
@@ -198,9 +182,6 @@ class FlowMeStatesDetection:
 # Instances globales
 flowme_states = None
 analytics = FlowMeAnalytics()
-
-# Ajout de l'analytics à l'app state
-app.state.analytics = analytics
 
 async def load_nocodb_states():
     global flowme_states
@@ -285,7 +266,7 @@ async def generate_mistral_response(message: str, detected_state: str) -> tuple[
         state_info = flowme_states.states.get(detected_state, {})
         state_description = state_info.get("description", detected_state)
         
-        system_prompt = f"""Tu es FlowMe, un compagnion IA empathique.
+        system_prompt = f"""Tu es FlowMe, un compagnon IA empathique.
 
 L'utilisateur ressent: {detected_state} ({state_description})
 
@@ -338,7 +319,6 @@ async def startup_event():
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
-    # Votre HTML existant ici...
     return HTMLResponse("""
     <!DOCTYPE html>
     <html lang="fr">
@@ -360,9 +340,24 @@ async def home():
             button { padding: 12px 24px; background: #667eea; color: white; border: none; border-radius: 10px; cursor: pointer; }
             button:hover { background: #5a6fd8; }
             .status { text-align: center; margin-top: 15px; font-size: 0.9em; color: #666; }
+            .analytics-link { 
+                position: fixed; 
+                top: 20px; 
+                right: 20px; 
+                background: rgba(255,255,255,0.9); 
+                padding: 10px 15px; 
+                border-radius: 10px; 
+                text-decoration: none; 
+                color: #667eea; 
+                font-weight: bold;
+                box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            }
+            .analytics-link:hover { background: #667eea; color: white; }
         </style>
     </head>
     <body>
+        <a href="/analytics" class="analytics-link" target="_blank">📊 Analytics</a>
+        
         <div class="container">
             <h1>🌊💙 FlowMe v3</h1>
             <div class="chat" id="chat">
@@ -374,7 +369,7 @@ async def home():
                 <input type="text" id="input" placeholder="Exprimez vos émotions..." maxlength="500">
                 <button onclick="sendMessage()">Envoyer</button>
             </div>
-            <div class="status" id="status">FlowMe v3 - Prêt</div>
+            <div class="status" id="status">FlowMe v3 - Prêt (avec Analytics)</div>
         </div>
         
         <script>
@@ -402,7 +397,8 @@ async def home():
                     if (response.ok) {
                         const data = await response.json();
                         addMessage(data.response, 'ai');
-                        document.getElementById('status').textContent = `État détecté: ${data.detected_state}`;
+                        const responseTime = data.response_time ? ` (${data.response_time}s)` : '';
+                        document.getElementById('status').textContent = `État: ${data.detected_state}${responseTime}`;
                     } else {
                         addMessage('Erreur de connexion.', 'ai');
                     }
@@ -482,12 +478,187 @@ async def chat_endpoint(chat_message: ChatMessage):
             "error": "Service indisponible"
         }, status_code=500)
 
-# ========== NOUVEAUX ENDPOINTS MONITORING ==========
+# ========== ENDPOINTS MONITORING ==========
 
 @app.get("/analytics")
 async def get_analytics():
-    """Dashboard d'analytics complet"""
-    return JSONResponse(analytics.get_analytics_summary())
+    """Dashboard d'analytics complet en JSON"""
+    summary = analytics.get_analytics_summary()
+    
+    # Ajouter des métriques détaillées
+    recent_conversations = []
+    for conv in sorted(analytics.conversations.values(), key=lambda x: x.start_time, reverse=True)[:10]:
+        recent_conversations.append({
+            "session_id": conv.session_id,
+            "start_time": conv.start_time.isoformat(),
+            "message_count": conv.message_count,
+            "emotions": conv.emotions_detected[-3:] if conv.emotions_detected else [],
+            "avg_response_time": round(conv.average_response_time, 2)
+        })
+    
+    summary["recent_conversations"] = recent_conversations
+    summary["error_log"] = [
+        {
+            "timestamp": err["timestamp"].isoformat(),
+            "type": err["type"],
+            "message": err["message"][:100]  # Limiter la taille
+        }
+        for err in analytics.error_log[-10:]  # 10 dernières erreurs
+    ]
+    
+    return JSONResponse(summary)
+
+@app.get("/analytics/dashboard")
+async def analytics_dashboard():
+    """Page HTML du dashboard analytics"""
+    return HTMLResponse("""
+    <!DOCTYPE html>
+    <html lang="fr">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>FlowMe Analytics Dashboard</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+            .container { max-width: 1200px; margin: 0 auto; }
+            .card { background: white; border-radius: 10px; padding: 20px; margin: 15px 0; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+            .metric { display: inline-block; margin: 10px 20px 10px 0; }
+            .metric-value { font-size: 2em; font-weight: bold; color: #667eea; }
+            .metric-label { color: #666; font-size: 0.9em; }
+            .error { color: #dc3545; }
+            .success { color: #28a745; }
+            h1, h2 { color: #333; }
+            .refresh-btn { 
+                background: #667eea; 
+                color: white; 
+                border: none; 
+                padding: 10px 20px; 
+                border-radius: 5px; 
+                cursor: pointer; 
+                margin-bottom: 20px;
+            }
+            .refresh-btn:hover { background: #5a6fd8; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>📊 FlowMe v3 - Analytics Dashboard</h1>
+            <button class="refresh-btn" onclick="loadAnalytics()">🔄 Actualiser</button>
+            
+            <div class="card">
+                <h2>📈 Métriques Générales</h2>
+                <div id="generalMetrics">Chargement...</div>
+            </div>
+            
+            <div class="card">
+                <h2>💭 Émotions Détectées</h2>
+                <div id="emotionMetrics">Chargement...</div>
+            </div>
+            
+            <div class="card">
+                <h2>💬 Conversations Récentes</h2>
+                <div id="conversationMetrics">Chargement...</div>
+            </div>
+            
+            <div class="card">
+                <h2>⚠️ Erreurs Récentes</h2>
+                <div id="errorMetrics">Chargement...</div>
+            </div>
+        </div>
+        
+        <script>
+            async function loadAnalytics() {
+                try {
+                    const response = await fetch('/analytics');
+                    const data = await response.json();
+                    
+                    // Métriques générales
+                    document.getElementById('generalMetrics').innerHTML = `
+                        <div class="metric">
+                            <div class="metric-value">${data.total_conversations}</div>
+                            <div class="metric-label">Conversations totales</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-value ${data.active_conversations > 0 ? 'success' : ''}">${data.active_conversations}</div>
+                            <div class="metric-label">Conversations actives</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-value">${data.total_messages}</div>
+                            <div class="metric-label">Messages totaux</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-value ${data.system_uptime_percent >= 95 ? 'success' : 'error'}">${data.system_uptime_percent}%</div>
+                            <div class="metric-label">Uptime système</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-value">${data.average_response_time}s</div>
+                            <div class="metric-label">Temps de réponse moyen</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-value">${Math.round(data.uptime_seconds / 3600)}h</div>
+                            <div class="metric-label">Uptime</div>
+                        </div>
+                    `;
+                    
+                    // Émotions
+                    let emotionsHtml = '';
+                    for (const [emotion, count] of Object.entries(data.top_emotions)) {
+                        emotionsHtml += `
+                            <div class="metric">
+                                <div class="metric-value">${count}</div>
+                                <div class="metric-label">${emotion}</div>
+                            </div>
+                        `;
+                    }
+                    document.getElementById('emotionMetrics').innerHTML = emotionsHtml || 'Aucune émotion détectée encore';
+                    
+                    // Conversations récentes
+                    let conversationsHtml = '<ul>';
+                    data.recent_conversations.forEach(conv => {
+                        conversationsHtml += `
+                            <li>
+                                <strong>${conv.session_id}</strong> - 
+                                ${conv.message_count} messages - 
+                                Émotions: ${conv.emotions.join(', ') || 'Aucune'} - 
+                                Temps moyen: ${conv.avg_response_time}s
+                            </li>
+                        `;
+                    });
+                    conversationsHtml += '</ul>';
+                    document.getElementById('conversationMetrics').innerHTML = conversationsHtml;
+                    
+                    // Erreurs récentes
+                    let errorsHtml = '<ul>';
+                    if (data.error_log && data.error_log.length > 0) {
+                        data.error_log.forEach(err => {
+                            errorsHtml += `
+                                <li class="error">
+                                    <strong>[${err.type}]</strong> ${err.message} 
+                                    <small>(${new Date(err.timestamp).toLocaleString()})</small>
+                                </li>
+                            `;
+                        });
+                    } else {
+                        errorsHtml += '<li class="success">Aucune erreur récente 🎉</li>';
+                    }
+                    errorsHtml += '</ul>';
+                    document.getElementById('errorMetrics').innerHTML = errorsHtml;
+                    
+                } catch (error) {
+                    console.error('Erreur de chargement des analytics:', error);
+                    document.getElementById('generalMetrics').innerHTML = '<div class="error">Erreur de chargement des analytics</div>';
+                }
+            }
+            
+            // Charger les analytics au chargement de la page
+            loadAnalytics();
+            
+            // Auto-refresh toutes les 30 secondes
+            setInterval(loadAnalytics, 30000);
+        </script>
+    </body>
+    </html>
+    """)
 
 @app.get("/health")
 async def health_check():
@@ -503,9 +674,8 @@ async def health_check():
         "uptime_seconds": summary["uptime_seconds"],
         "system_uptime_percent": summary["system_uptime_percent"],
         "active_conversations": summary["active_conversations"],
-        "memory_usage": summary["memory_usage"],
-        "cpu_usage": summary["cpu_usage"],
-        "average_response_time": summary["average_response_time"]
+        "average_response_time": summary["average_response_time"],
+        "recent_errors": summary["recent_errors"]
     })
 
 @app.get("/analytics/emotions")
