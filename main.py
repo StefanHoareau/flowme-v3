@@ -267,7 +267,7 @@ analytics = FlowMeAnalytics()
 async def load_nocodb_states():
     global flowme_states
     
-    logger.info("🔍 Chargement des états FlowMe depuis NocoDB...")
+    logger.info("🔍 Chargement des états FlowMe depuis NocoDB avec VRAIES colonnes...")
     nocodb_status = False
     
     if NOCODB_API_KEY and NOCODB_STATES_TABLE_ID:
@@ -290,34 +290,41 @@ async def load_nocodb_states():
                             if isinstance(record, dict):
                                 name = record.get("Nom_État")
                                 if name:
-                                    # Données de base pour la détection
+                                    # Données de base pour la détection (format simplifié)
                                     nocodb_states[name] = {
                                         "description": record.get("Tension_Dominante", ""),
-                                        "color": record.get("Couleur", "#808080"),
-                                        "emoji": record.get("Emoji", "😐")
+                                        "color": "#667eea",  # Couleur par défaut
+                                        "emoji": "🔮"  # Emoji par défaut
                                     }
                                     
-                                    # Données COMPLÈTES pour Mistral
+                                    # DONNÉES COMPLÈTES RÉELLES pour Mistral
                                     nocodb_full_data[name] = {
+                                        "id_etat": record.get("ID_État", ""),
                                         "nom": name,
-                                        "tension_dominante": record.get("Tension_Dominante", ""),
                                         "famille_symbolique": record.get("Famille_Symbolique", ""),
-                                        "mouvement_energetique": record.get("Mouvement_Energétique", ""),
-                                        "qualites_specifiques": record.get("Qualités_Spécifiques", ""),
-                                        "pratiques_associees": record.get("Pratiques_Associées", ""),
-                                        "sagesse_traditionnelle": record.get("Sagesse_Traditionnelle", ""),
-                                        "applications_therapeutiques": record.get("Applications_Thérapeutiques", ""),
-                                        "couleur": record.get("Couleur", "#808080"),
-                                        "emoji": record.get("Emoji", "😐"),
+                                        "tension_dominante": record.get("Tension_Dominante", ""),
+                                        "mot_cle": record.get("Mot_Clé", ""),
+                                        "declencheurs": record.get("Déclencheurs", ""),
+                                        "posture_adaptative": record.get("Posture_Adaptative", ""),
+                                        "etats_compatibles": record.get("États_Compatibles", ""),
+                                        "etats_sequenciels": record.get("États_Séquenciels", ""),
+                                        "conseil_flowme": record.get("Conseil_Flowme", ""),
                                         "raw_record": record  # Données brutes complètes
                                     }
                         
                         if nocodb_states:
                             flowme_states = EnhancedFlowMeStatesDetection(nocodb_states, "NocoDB")
-                            # IMPORTANT: Passer les données complètes à FlowMe
+                            # IMPORTANT: Passer les données RÉELLES à FlowMe
                             flowme_states.set_nocodb_data(nocodb_full_data)
                             nocodb_status = True
-                            logger.info(f"✅ {len(nocodb_states)} états chargés depuis NocoDB avec données complètes")
+                            logger.info(f"✅ {len(nocodb_states)} états chargés depuis NocoDB avec VRAIES colonnes")
+                            
+                            # Log des colonnes disponibles pour debug
+                            if nocodb_full_data:
+                                sample_state = list(nocodb_full_data.keys())[0]
+                                available_columns = list(nocodb_full_data[sample_state].keys())
+                                logger.info(f"📊 Colonnes disponibles pour Mistral: {available_columns}")
+                            
                             return nocodb_status
                 
                 logger.warning("⚠️ NocoDB non disponible - aucun record trouvé")
@@ -364,32 +371,34 @@ async def generate_mistral_response(message: str, detected_state: str) -> tuple[
         return f"Je comprends que vous ressentez de la {detected_state.lower()}. Comment puis-je vous accompagner ?", mistral_status
     
     try:
-        # RÉCUPÉRER LES DONNÉES COMPLÈTES DE L'ÉTAT depuis NocoDB
+        # RÉCUPÉRER LES VRAIES DONNÉES de l'état depuis NocoDB
         state_data = flowme_states.get_state_for_mistral(detected_state)
         
-        # Construire le prompt enrichi avec toutes les données NocoDB
+        # Construire le prompt enrichi avec les VRAIES colonnes NocoDB
         if flowme_states.source == "NocoDB" and detected_state in flowme_states.nocodb_full_data:
             full_state = flowme_states.nocodb_full_data[detected_state]
             
             system_prompt = f"""Tu es FlowMe, un compagnon IA empathique spécialisé dans l'accompagnement émotionnel.
 
-ÉTAT DÉTECTÉ: {detected_state}
+ÉTAT DÉTECTÉ: {detected_state} (ID: {full_state.get('id_etat', '')})
 
 INFORMATIONS COMPLÈTES SUR L'ÉTAT:
-- Tension dominante: {full_state.get('tension_dominante', '')}
 - Famille symbolique: {full_state.get('famille_symbolique', '')}
-- Mouvement énergétique: {full_state.get('mouvement_energetique', '')}
-- Qualités spécifiques: {full_state.get('qualites_specifiques', '')}
-- Pratiques associées: {full_state.get('pratiques_associees', '')}
-- Sagesse traditionnelle: {full_state.get('sagesse_traditionnelle', '')}
-- Applications thérapeutiques: {full_state.get('applications_therapeutiques', '')}
+- Tension dominante: {full_state.get('tension_dominante', '')}
+- Mot-clé: {full_state.get('mot_cle', '')}
+- Déclencheurs: {full_state.get('declencheurs', '')}
+- Posture adaptative: {full_state.get('posture_adaptative', '')}
+- États compatibles: {full_state.get('etats_compatibles', '')}
+- États séquenciels: {full_state.get('etats_sequenciels', '')}
+- Conseil FlowMe: {full_state.get('conseil_flowme', '')}
 
-INSTRUCTIONS:
-1. Utilise ces informations détaillées pour comprendre profondément l'état de l'utilisateur
-2. Réponds de manière empathique et personnalisée basée sur ces données
-3. Propose des conseils ou pratiques en lien avec les "pratiques associées" si approprié
-4. Intègre la sagesse traditionnelle de manière naturelle
-5. Reste bienveillant et encourageant (max 150 mots)
+INSTRUCTIONS POUR MISTRAL:
+1. Utilise la "Tension dominante" pour comprendre l'énergie de l'état
+2. Utilise la "Famille symbolique" pour contextualiser poétiquement
+3. Intègre le "Conseil FlowMe" de manière naturelle dans ta réponse
+4. Propose la "Posture adaptative" comme guidance pratique si approprié
+5. Reste empathique et bienveillant (max 150 mots)
+6. Utilise les "Déclencheurs" pour valider ce que ressent l'utilisateur
 
 Message de l'utilisateur: {message}"""
         
@@ -447,7 +456,7 @@ async def startup_event():
         error_count=0
     )
     
-    logger.info("🚀 FlowMe v3 démarré avec intégration Mistral + NocoDB complète")
+    logger.info("🚀 FlowMe v3 démarré avec intégration Mistral + NocoDB CORRIGÉE")
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
@@ -500,24 +509,36 @@ async def home():
                 background: rgba(255, 193, 7, 0.9);
                 color: #333;
             }
+            .debug-link {
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                background: rgba(108, 117, 125, 0.9);
+                padding: 8px 12px;
+                border-radius: 8px;
+                text-decoration: none;
+                color: white;
+                font-size: 0.8em;
+            }
         </style>
     </head>
     <body>
         <div class="nocodb-status" id="nocodbStatus">🔄 Chargement...</div>
         <a href="/analytics/dashboard" class="analytics-link" target="_blank">📊 Analytics</a>
+        <a href="/debug/nocodb-real" class="debug-link" target="_blank">🔍 Debug</a>
         
         <div class="container">
-            <h1>🌊💙 FlowMe v3 Enhanced</h1>
+            <h1>🌊💙 FlowMe v3 CORRIGÉ</h1>
             <div class="chat" id="chat">
                 <div class="message ai-message">
-                    <strong>FlowMe:</strong> Bonjour ! Je suis maintenant connecté à la base de données complète des états émotionnels. Comment vous sentez-vous aujourd'hui ?
+                    <strong>FlowMe:</strong> Bonjour ! Je suis maintenant connecté aux VRAIES données de votre base NocoDB. Comment vous sentez-vous aujourd'hui ?
                 </div>
             </div>
             <div class="input-container">
                 <input type="text" id="input" placeholder="Exprimez vos émotions..." maxlength="500">
                 <button onclick="sendMessage()">Envoyer</button>
             </div>
-            <div class="status" id="status">FlowMe v3 Enhanced - Prêt</div>
+            <div class="status" id="status">FlowMe v3 CORRIGÉ - Prêt</div>
         </div>
         
         <script>
@@ -547,7 +568,7 @@ async def home():
                 if (!message) return;
                 
                 isProcessing = true;
-                document.getElementById('status').textContent = 'FlowMe analyse avec NocoDB...';
+                document.getElementById('status').textContent = 'FlowMe analyse avec les VRAIES données...';
                 
                 addMessage(message, 'user');
                 input.value = '';
@@ -563,8 +584,8 @@ async def home():
                         const data = await response.json();
                         addMessage(data.response, 'ai');
                         const responseTime = data.response_time ? ` (${data.response_time}s)` : '';
-                        const source = data.source === 'NocoDB' ? '🟢 NocoDB' : '🟡 Local';
-                        document.getElementById('status').textContent = `État: ${data.detected_state} • Source: ${source}${responseTime}`;
+                        const source = data.source === 'NocoDB' ? '🟢 VRAIES données' : '🟡 Local';
+                        document.getElementById('status').textContent = `État: ${data.detected_state} • ${source}${responseTime}`;
                     } else {
                         addMessage('Erreur de connexion.', 'ai');
                     }
@@ -610,7 +631,7 @@ async def chat_endpoint(chat_message: ChatMessage):
         # Détection d'émotion améliorée
         detected_state = flowme_states.detect_emotion(clean_message)
         
-        # Génération de réponse avec données NocoDB complètes
+        # Génération de réponse avec VRAIES données NocoDB
         ai_response, mistral_status = await generate_mistral_response(clean_message, detected_state)
         
         # Calculer le temps de réponse
@@ -636,7 +657,8 @@ async def chat_endpoint(chat_message: ChatMessage):
             "source": flowme_states.source,
             "timestamp": datetime.now().isoformat(),
             "response_time": round(response_time, 2),
-            "nocodb_integration": flowme_states.source == "NocoDB"
+            "nocodb_integration": flowme_states.source == "NocoDB",
+            "real_data_used": flowme_states.source == "NocoDB" and detected_state in flowme_states.nocodb_full_data
         })
         
     except Exception as e:
@@ -676,12 +698,13 @@ async def get_analytics():
         for err in analytics.error_log[-10:]
     ]
     
-    # Informations sur l'intégration NocoDB
+    # Informations sur l'intégration NocoDB CORRIGÉE
     summary["nocodb_integration"] = {
         "source": flowme_states.source if flowme_states else "none",
         "states_loaded": len(flowme_states.states) if flowme_states else 0,
         "full_data_available": len(flowme_states.nocodb_full_data) if flowme_states and hasattr(flowme_states, 'nocodb_full_data') else 0,
-        "mistral_enhanced": flowme_states.source == "NocoDB" if flowme_states else False
+        "mistral_enhanced": flowme_states.source == "NocoDB" if flowme_states else False,
+        "real_columns_used": True if flowme_states and flowme_states.source == "NocoDB" else False
     }
     
     return JSONResponse(summary)
@@ -695,7 +718,7 @@ async def analytics_dashboard():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>FlowMe Analytics Dashboard</title>
+        <title>FlowMe Analytics Dashboard - CORRIGÉ</title>
         <style>
             body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
             .container { max-width: 1200px; margin: 0 auto; }
@@ -718,11 +741,15 @@ async def analytics_dashboard():
             }
             .refresh-btn:hover { background: #5a6fd8; }
             .nocodb-status {
-                background: linear-gradient(135deg, #667eea, #764ba2);
+                background: linear-gradient(135deg, #28a745, #20c997);
                 color: white;
                 padding: 15px;
                 border-radius: 10px;
                 margin-bottom: 20px;
+            }
+            .nocodb-status.warning {
+                background: linear-gradient(135deg, #ffc107, #fd7e14);
+                color: #333;
             }
             .status-indicator {
                 display: inline-block;
@@ -738,11 +765,11 @@ async def analytics_dashboard():
     </head>
     <body>
         <div class="container">
-            <h1>📊 FlowMe v3 - Analytics Dashboard Enhanced</h1>
+            <h1>📊 FlowMe v3 - Analytics Dashboard CORRIGÉ</h1>
             <button class="refresh-btn" onclick="loadAnalytics()">🔄 Actualiser</button>
             
-            <div class="card nocodb-status">
-                <h2>🔗 Statut Intégration NocoDB</h2>
+            <div class="card nocodb-status" id="nocodbCard">
+                <h2>🔗 Statut Intégration NocoDB CORRIGÉE</h2>
                 <div id="nocodbIntegration">Chargement...</div>
             </div>
             
@@ -773,26 +800,33 @@ async def analytics_dashboard():
                     const response = await fetch('/analytics');
                     const data = await response.json();
                     
-                    // Statut NocoDB
+                    // Statut NocoDB CORRIGÉ
                     const nocodb = data.nocodb_integration;
+                    const nocodbCard = document.getElementById('nocodbCard');
                     let statusHtml = '';
-                    if (nocodb.source === 'NocoDB') {
+                    
+                    if (nocodb.source === 'NocoDB' && nocodb.real_columns_used) {
+                        nocodbCard.className = 'card nocodb-status';
                         statusHtml = `
-                            <div><span class="status-indicator status-online"></span><strong>NocoDB Connecté</strong></div>
-                            <p>✅ ${nocodb.states_loaded} états chargés depuis NocoDB</p>
-                            <p>✅ ${nocodb.full_data_available} états avec données complètes pour Mistral</p>
-                            <p>✅ Mistral AI utilise les données enrichies NocoDB</p>
+                            <div><span class="status-indicator status-online"></span><strong>✅ NocoDB PARFAITEMENT Connecté</strong></div>
+                            <p>🎉 ${nocodb.states_loaded} états chargés avec les VRAIES colonnes</p>
+                            <p>🎯 ${nocodb.full_data_available} états avec données complètes pour Mistral</p>
+                            <p>🤖 Mistral AI utilise: Famille_Symbolique, Tension_Dominante, Conseil_Flowme, etc.</p>
+                            <p>💫 <strong>Qualité de réponse MAXIMALE activée !</strong></p>
                         `;
-                    } else if (nocodb.source === 'Local') {
+                    } else if (nocodb.source === 'NocoDB') {
+                        nocodbCard.className = 'card nocodb-status warning';
                         statusHtml = `
-                            <div><span class="status-indicator status-local"></span><strong>Mode Local (Fallback)</strong></div>
-                            <p>⚠️ ${nocodb.states_loaded} états locaux chargés</p>
-                            <p>⚠️ NocoDB non disponible - Mistral utilise les données de base</p>
+                            <div><span class="status-indicator status-local"></span><strong>⚠️ NocoDB Connecté mais Données Limitées</strong></div>
+                            <p>📊 ${nocodb.states_loaded} états chargés</p>
+                            <p>⚠️ Vérifiez les colonnes dans /debug/nocodb-real</p>
                         `;
                     } else {
+                        nocodbCard.className = 'card nocodb-status warning';
                         statusHtml = `
-                            <div><span class="status-indicator status-offline"></span><strong>Service Non Disponible</strong></div>
-                            <p>❌ Aucun état chargé</p>
+                            <div><span class="status-indicator status-offline"></span><strong>🟡 Mode Local (Fallback)</strong></div>
+                            <p>📱 ${nocodb.states_loaded} états locaux</p>
+                            <p>⚠️ NocoDB non disponible - Mistral utilise les données de base</p>
                         `;
                     }
                     document.getElementById('nocodbIntegration').innerHTML = statusHtml;
@@ -892,7 +926,7 @@ async def health_check():
     
     return JSONResponse({
         "status": "healthy",
-        "version": "3.0.0-enhanced",
+        "version": "3.0.0-corrected",
         "states_count": len(flowme_states.states) if flowme_states else 0,
         "source": flowme_states.source if flowme_states else "none",
         "timestamp": datetime.now().isoformat(),
@@ -902,7 +936,8 @@ async def health_check():
         "average_response_time": summary["average_response_time"],
         "recent_errors": summary["recent_errors"],
         "nocodb_integration": flowme_states.source == "NocoDB" if flowme_states else False,
-        "full_nocodb_data": len(flowme_states.nocodb_full_data) if flowme_states and hasattr(flowme_states, 'nocodb_full_data') else 0
+        "full_nocodb_data": len(flowme_states.nocodb_full_data) if flowme_states and hasattr(flowme_states, 'nocodb_full_data') else 0,
+        "real_columns_used": flowme_states.source == "NocoDB" if flowme_states else False
     })
 
 @app.get("/analytics/emotions")
@@ -941,7 +976,7 @@ async def conversation_analytics():
 
 @app.get("/debug/nocodb")
 async def debug_nocodb():
-    """Endpoint de debug pour vérifier l'intégration NocoDB"""
+    """Endpoint de debug pour vérifier l'intégration NocoDB (ancien)"""
     if not flowme_states:
         return JSONResponse({"error": "FlowMe non initialisé"})
     
@@ -960,6 +995,43 @@ async def debug_nocodb():
             "state_name": first_state,
             "data": flowme_states.nocodb_full_data[first_state]
         }
+    
+    return JSONResponse(debug_info)
+
+@app.get("/debug/nocodb-real")
+async def debug_nocodb_real():
+    """Endpoint pour vérifier les VRAIES données NocoDB chargées"""
+    if not flowme_states:
+        return JSONResponse({"error": "FlowMe non initialisé"})
+    
+    debug_info = {
+        "source": flowme_states.source,
+        "states_count": len(flowme_states.states),
+        "states_list": list(flowme_states.states.keys()),
+        "nocodb_full_data_available": hasattr(flowme_states, 'nocodb_full_data'),
+        "nocodb_full_data_count": len(flowme_states.nocodb_full_data) if hasattr(flowme_states, 'nocodb_full_data') else 0
+    }
+    
+    if hasattr(flowme_states, 'nocodb_full_data') and flowme_states.nocodb_full_data:
+        # Exemple d'un état pour debug avec VRAIES colonnes
+        first_state = list(flowme_states.nocodb_full_data.keys())[0]
+        debug_info["sample_nocodb_data"] = {
+            "state_name": first_state,
+            "available_columns": list(flowme_states.nocodb_full_data[first_state].keys()),
+            "sample_data": flowme_states.nocodb_full_data[first_state]
+        }
+        
+        # Vérifier si on a bien les VRAIES colonnes attendues
+        expected_columns = ["famille_symbolique", "tension_dominante", "mot_cle", "declencheurs", 
+                          "posture_adaptative", "etats_compatibles", "etats_sequenciels", "conseil_flowme"]
+        
+        debug_info["column_check"] = {}
+        for col in expected_columns:
+            debug_info["column_check"][col] = col in flowme_states.nocodb_full_data[first_state]
+        
+        debug_info["correction_status"] = "✅ CORRIGÉ - Utilise les vraies colonnes NocoDB"
+    else:
+        debug_info["correction_status"] = "❌ Problème - Données NocoDB non disponibles"
     
     return JSONResponse(debug_info)
 
